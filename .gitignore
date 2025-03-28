@@ -1,0 +1,13 @@
+!data/.gitkeep
+!models/.gitkeep
+!notebooks/.gitkeep
+!src/.gitkeep
+.ipynb_checkpoints
+.idea/
+__pycache__/
+__pypackages__/
+.pytest_cache/
+data/*
+*/mlruns/*
+*/runs/*
+*/lightning_logs/*
