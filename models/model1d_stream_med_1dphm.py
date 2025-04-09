@@ -68,8 +68,9 @@ def calculate_PHM(
     # Finally, estimate the complex mask
     # print(torch.isnan(mask_tf).any())
     complex_mask = mask_tf * (cos_phase + sign * 1j * sin_phase)
+    complex_mask_residual = mask_tf_residual * (cos_phase + sign * 1j * sin_phase)
 
-    return complex_mask
+    return complex_mask, complex_mask_residual
 
 
 class StandardConv1d(nn.Module):
@@ -80,7 +81,7 @@ class StandardConv1d(nn.Module):
                       out_channels=out_channels,
                       kernel_size=kernel_size,
                       stride=stride,
-                      padding=stride // 2),
+                      padding=stride // 2),     # Может, kernel_size?
             nn.ReLU(inplace=True))
 
     def forward(self, x):
@@ -255,11 +256,15 @@ class TRUNet(nn.Module):
         x15 = self.up5(x14, x2)
         x16 = self.up6(x15, x1)
 
-        mask = calculate_PHM(x16[:, :5, :])
+        mask_d, _ = calculate_PHM(x16[:, :5, :])
+        mask_n, mask_n_residual = calculate_PHM(x16[:, 5:, :])
+        mask_r = mask_n_residual - mask_d
         # mask = x16[:, 0:1, :]
-        mask = mask.reshape(bs, mask.shape[1], mask.shape[2], time)
+        mask_d = mask_d.reshape(bs, mask_d.shape[1], mask_d.shape[2], time)
+        mask_n = mask_n.reshape(bs, mask_n.shape[1], mask_n.shape[2], time)
+        mask_r = mask_r.reshape(bs, mask_r.shape[1], mask_r.shape[2], time)
 
-        return mask.squeeze(1), h_f, h_t
+        return mask_d.squeeze(1), mask_n.squeeze(1), mask_r.squeeze(1), h_f, h_t
 
 
 if __name__ == '__main__':
@@ -281,8 +286,8 @@ if __name__ == '__main__':
     )
 
     print("input_shape:", x.shape)
-    wave, _, _ = TRU(x.abs(), x.real, x.imag, h_f, h_t)
-    print("output_shape:", wave.shape)
+    wave_d, wave_n, wave_r, _, _ = TRU(x.abs(), x.real, x.imag, h_f, h_t)
+    print("output_shape:", wave_d.shape, wave_n.shape, wave_r.shape)
     # print(wave)
     # total params: 180336
     # input_shape: torch.Size([4, 257, 3])

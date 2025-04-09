@@ -17,8 +17,8 @@ from typing import Union, Tuple
 
 from random import shuffle, randint, choice, uniform
 
-WALLS_KEYWORDS = ["hard_surface", "ceramic_tiles", "plasterboard", "wooden_lining", ] # Найти стеклянные стены
-FLOOR_KEYWORDS = ["linoleum_on_concrete", "carpet_cotton", "glass_3mm"]
+WALLS_KEYWORDS = ["hard_surface", "ceramic_tiles", "plasterboard", "wooden_lining", "glass_3mm"]    # Убрать материалы
+FLOOR_KEYWORDS = ["linoleum_on_concrete", "carpet_cotton"]
 CEILING_KEYWORDS = ["ceiling_plasterboard", "ceiling_fissured_tile", "ceiling_metal_panel", ]
 
 
@@ -31,10 +31,16 @@ class SignalDataset(ABC, Dataset):
                  noise_dir: str =None,
                  room_square: Tuple[float, float] = (7., 14.),
                  room_height: Tuple[float, float] = (3., 4.),
+                 return_noise: bool = False,
+                 return_rir: bool = False,
+                 max_seq_len: int = None,
+                 partition: int = None,
                  mode="train"):
 
         self.path = data_dir_path
         self.signal_files = [x for x in os.listdir(self.path) if x[-3:] == "wav"]
+        if partition is not None:
+            self.signal_files = self.signal_files[:partition]
         shuffle(self.signal_files)
 
         self.sr = sr
@@ -49,6 +55,10 @@ class SignalDataset(ABC, Dataset):
         if self.noise_dir is not None:
             self.noise_files = os.listdir(noise_dir)
             shuffle(self.noise_files)
+
+        self.return_noise = return_noise
+        self.return_rir = return_rir
+        self.max_seq_len = max_seq_len
 
     @staticmethod
     def simulate_noise(signal: torch.Tensor, noise: torch.Tensor, snr_db: int) -> torch.Tensor:
@@ -89,7 +99,7 @@ class SignalDataset(ABC, Dataset):
         material = {"east": wall, "west": wall, "north": wall, "south": wall, "ceiling": ceil, "floor": floor}
 
         room = pra.ShoeBox(room_dim, fs=self.sr, materials=material, max_order=max_order,
-                           use_rand_ism=True, max_rand_disp=0.05)
+                           use_rand_ism=True, max_rand_disp=0.05, ray_tracing=False)
 
         source_locs = [uniform(0.01, length), uniform(0.01, width), uniform(1.0, 2.0)]
         mic_locs = np.array([x * 0.98 for x in source_locs])[:, None]
@@ -132,6 +142,7 @@ class SignalDataset(ABC, Dataset):
         rir = self.simulate_rir_shoebox(target_signal)[None, :]
 
         rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='same', axes=-1))     # Почему full?
+        rir_component = rir_signal - target_signal
 
         if self.noise_dir is not None:
             filename_noise = choice(self.noise_files)
@@ -145,6 +156,27 @@ class SignalDataset(ABC, Dataset):
             noise = self.simulate_noise(rir_signal, noise, snr_db)
 
             output = rir_signal + noise
+            # if self.return_noise and self.return_rir:
+            if self.max_seq_len is not None:
+                output_padded = torch.zeros(1, self.max_seq_len)
+                output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
+
+                target_padded = torch.zeros(1, self.max_seq_len)
+                target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
+
+                noise_padded = None
+                if self.return_noise:
+                    noise_padded = torch.zeros(1, self.max_seq_len)
+                    noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
+
+                rir_padded = None
+                if self.return_rir:
+                    rir_padded = torch.zeros(1, self.max_seq_len)
+                    rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
+
+                return output_padded, target_padded, noise_padded, rir_padded
+
+            return output, target_signal, noise if self.return_noise else None, rir_component if self.return_rir else None
 
         else:
             output = rir_signal
@@ -154,7 +186,21 @@ class SignalDataset(ABC, Dataset):
 
         # chunked_output = self._preprocess(chunked_output)
 
-        return output, target_signal
+        if self.max_seq_len is not None:
+            output_padded = torch.zeros(1, self.max_seq_len)
+            output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
+
+            target_padded = torch.zeros(1, self.max_seq_len)
+            target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
+
+            rir_padded = None
+            if self.return_rir:
+                rir_padded = torch.zeros(1, self.max_seq_len)
+                rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
+
+            return output_padded, target_padded, rir_padded
+
+        return output, target_signal, rir_component if self.return_rir else None
 
 
 class TRUNetDataset(SignalDataset):
@@ -166,11 +212,17 @@ class TRUNetDataset(SignalDataset):
                  noise_dir: str = None,
                  room_square: Tuple[float, float] = (7., 14.),
                  room_height: Tuple[float, float] = (3., 4.),
-                 mode="train"):
+                 return_noise: bool = False,
+                 return_rir: bool = False,
+                 max_seq_len: int = None,
+                 partition: int = None,
+                 mode="train",):
 
         super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
                                             stride=stride, noise_dir=noise_dir, room_square=room_square,
-                                            room_height=room_height, mode=mode)
+                                            room_height=room_height, return_noise=return_noise,
+                                            return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
+                                            mode=mode)
 
     @staticmethod
     def _preprocess(signal: torch.Tensor) -> torch.Tensor:

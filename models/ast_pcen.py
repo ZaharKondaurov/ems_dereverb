@@ -15,7 +15,7 @@ except ImportError:  # Fallback for >= Python 3.7
 
 class ExponentialMovingAverage(nn.Module):
     """
-    Computes the exponential moving average of an sequential input.
+    Computes the exponential moving average of a sequential input.
 
     Influenced by leaf-audio's tensorflow implementation
         https://github.com/google-research/leaf-audio/blob/7ead2f9fe65da14c693c566fe8259ccaaf14129d/leaf_audio/postprocessing.py#L27
@@ -33,7 +33,7 @@ class ExponentialMovingAverage(nn.Module):
     ):
         super().__init__()
         if per_channel:
-            weights = torch.full((n_channels,), fill_value=smooth)
+            weights = torch.full((n_channels,), fill_value=smooth)  # Зачем инициализировать одним значением?
         else:
             weights = torch.full((1,), fill_value=smooth)
 
@@ -78,7 +78,7 @@ class _PCEN(nn.Module):
     ):
         super().__init__()
 
-        if trainable is True or trainable is False:
+        if isinstance(trainable, bool):
             trainable = TrainableParameters(
                 alpha=trainable, delta=trainable, root=trainable, smooth=trainable
             )
@@ -177,7 +177,7 @@ class PCEN(_PCEN):
         """Computes the PCEN from magnitude spectrum representation.
 
         Args:
-            mag_spec: A tensor containing an magnitude spectrum representation.
+            mag_spec: A tensor containing a magnitude spectrum representation.
 
         Shapes
             (batch, n_channels, freq, time) -> (batch, n_channels, freq, time)
@@ -243,7 +243,7 @@ class StatefulPCEN(_PCEN):
         """Computes the PCEN from magnitude spectrum representation, and an optional smoothed version of the filterbank (Equation (2) in [1]).
 
         Args:
-            mag_spec: tensor containing an magnitude spectrum representation.
+            mag_spec: tensor containing a magnitude spectrum representation.
             initial_state: A tensor containing the initial hidden state.
                 If set to None, defaults to the first element by time (dim=-1) in the mag_spec tensor.
                 Defaults to None

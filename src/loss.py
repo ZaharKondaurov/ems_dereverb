@@ -2,8 +2,7 @@ import torch
 import torch.nn.functional as F
 
 
-def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts: list = None,
-            hop_fr: float = 0.25):
+def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts: list = None, hop_fr: float = 0.25):
     if nffts is None:
         nffts = [1024, 512, 256]
     # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
@@ -44,7 +43,7 @@ def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
     for seg in lens:
         input_chunks = torch.split(input, seg, dim=1)
         target_chunks = torch.split(target, seg, dim=1)
-        assert len(input_chunks) == len(target_chunks)
+        assert len(input_chunks) == len(target_chunks), f"{len(input_chunks)} != {len(target_chunks)}"
         loss_interm = torch.zeros((input.shape[0],), device=input.device, dtype=input.dtype)
         for in_ch, tg_ch in zip(input_chunks, target_chunks):
             # print(in_ch.shape, tg_ch.shape, ' !!!!!!!!!losses chunks!!!!!!!')
@@ -61,7 +60,22 @@ def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
     return loss
 
 
-def loss_tot(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts: list = None,
-             hop_fr: float = 0.75, lens: list = None):
-    return loss_MR_w(input, target, lens) + 2 * loss_MR(input, target, gamma, nffts, hop_fr)
+def loss_tot(input_signal: torch.Tensor, target: torch.Tensor,
+             noise: torch.Tensor = None, target_noise: torch.Tensor = None,
+             rir: torch.Tensor = None, target_rir: torch.Tensor = None,
+             gamma: float = 0.3, nffts: list = None, hop_fr: float = 0.75, lens: list = None):
+
+    loss_mr_w = loss_MR_w(input_signal, target, lens)
+    loss_mr = loss_MR(input_signal, target, gamma, nffts, hop_fr)
+
+    if noise is not None and target_noise is not None:
+        loss_mr_w += loss_MR_w(noise, target_noise, lens)
+        loss_mr += loss_MR(noise, target_noise, gamma, nffts, hop_fr)
+    if rir is not None and target_rir is not None:
+        loss_mr_w += loss_MR_w(rir, target_rir, lens)
+        loss_mr += loss_MR(rir, target_rir, gamma, nffts, hop_fr)
+
+    # loss_mr = (loss_MR(input_signal, target, gamma, nffts, hop_fr) + loss_MR(noise, target_noise, gamma, nffts, hop_fr)
+    #            + loss_MR(rir, target_rir, gamma, nffts, hop_fr))
+    return loss_mr_w + 2 * loss_mr
 
