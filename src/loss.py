@@ -32,7 +32,7 @@ def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts
         loss += F.mse_loss(Y_abs, S_abs)
     #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
     # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
-    return loss
+    return loss / len(nffts)
 
 
 def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
@@ -57,7 +57,7 @@ def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
         loss += torch.sum(loss_interm, dim=0)/loss_interm.shape[0] / len(input_chunks)
         # print(loss, f' !!!!!!!!!lossMRw for {seg}!!!!!!!!!!!!')
     # print(loss.shape, loss,  ' !!!!!!!!!lossMRw!!!!!!!!!!!!')
-    return loss
+    return loss / len(lens)
 
 
 def loss_tot(input_signal: torch.Tensor, target: torch.Tensor,

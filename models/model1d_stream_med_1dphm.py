@@ -198,20 +198,35 @@ class TRUNet(nn.Module):
         super(TRUNet, self).__init__()
         self.pcen = StatefulPCEN(smooth=0.025, trainable={"alpha": True, "delta": False, "root": True, "smooth": False})
 
-        self.down1 = StandardConv1d(4, 16, 4, 2)
-        self.down2 = DepthwiseSeparableConv1d(16, 32, 3, 1)
-        self.down3 = DepthwiseSeparableConv1d(32, 32, 5, 2)
-        self.down4 = DepthwiseSeparableConv1d(32, 32, 3, 1)
-        self.down5 = DepthwiseSeparableConv1d(32, 32, 5, 2)
-        self.down6 = DepthwiseSeparableConv1d(32, 64, 3, 2)
-        self.FGRU = GRUBlock(64, 64, 64, bidirectional=True, batch_first=True)
+        # self.down1 = StandardConv1d(4, 16, 4, 2)
+        # self.down2 = DepthwiseSeparableConv1d(16, 32, 3, 1)
+        # self.down3 = DepthwiseSeparableConv1d(32, 32, 5, 2)
+        # self.down4 = DepthwiseSeparableConv1d(32, 32, 3, 1)
+        # self.down5 = DepthwiseSeparableConv1d(32, 32, 5, 2)
+        # self.down6 = DepthwiseSeparableConv1d(32, 64, 3, 2)
+        # self.FGRU = GRUBlock(64, 64, 64, bidirectional=True, batch_first=True)
+        # self.TGRU = GRUBlock(64, 128, 64, bidirectional=False, batch_first=False)
+        # self.up1 = FirstTrCNN(64, 32, 3, 2)
+        # self.up2 = TrCNN(64, 32, 5, 2)
+        # self.up3 = TrCNN(64, 32, 3, 1)
+        # self.up4 = TrCNN(64, 32, 5, 2)
+        # self.up5 = TrCNN(64, 32, 3, 1)
+        # self.up6 = LastTrCNN(48, 10, 5, 2)  # 5 kernel with dc bin, 4 kernel for cut dc
+
+        self.down1 = StandardConv1d(4, 64, 5, 2)
+        self.down2 = DepthwiseSeparableConv1d(64, 128, 3, 1)
+        self.down3 = DepthwiseSeparableConv1d(128, 128, 5, 2)
+        self.down4 = DepthwiseSeparableConv1d(128, 128, 3, 1)
+        self.down5 = DepthwiseSeparableConv1d(128, 128, 5, 2)
+        self.down6 = DepthwiseSeparableConv1d(128, 128, 3, 2)
+        self.FGRU = GRUBlock(128, 64, 64, bidirectional=True, batch_first=True)
         self.TGRU = GRUBlock(64, 128, 64, bidirectional=False, batch_first=False)
-        self.up1 = FirstTrCNN(64, 32, 3, 2)
-        self.up2 = TrCNN(64, 32, 5, 2)
-        self.up3 = TrCNN(64, 32, 3, 1)
-        self.up4 = TrCNN(64, 32, 5, 2)
-        self.up5 = TrCNN(64, 32, 3, 1)
-        self.up6 = LastTrCNN(48, 10, 5, 2)  # 5 kernel with dc bin, 4 kernel for cut dc
+        self.up1 = FirstTrCNN(64, 64, 3, 2)
+        self.up2 = TrCNN(192, 64, 5, 2)
+        self.up3 = TrCNN(192, 64, 3, 1)
+        self.up4 = TrCNN(192, 64, 5, 2)
+        self.up5 = TrCNN(192, 64, 3, 1)
+        self.up6 = LastTrCNN(128, 10, 5, 2)
 
     def forward(self, x_abs, real, imag, h0_f, h0_t):
         # print(torch.isnan(x).any(), ' x')
@@ -255,16 +270,19 @@ class TRUNet(nn.Module):
         x14 = self.up4(x13, x3)
         x15 = self.up5(x14, x2)
         x16 = self.up6(x15, x1)
+        x16 = x16[:, 0, ...].reshape(x_abs.shape[0], 257, -1)
+        # print(x16.shape, x_abs.shape)
+        mask_d = x16 * x_abs
 
-        mask_d, _ = calculate_PHM(x16[:, :5, :])
-        mask_n, mask_n_residual = calculate_PHM(x16[:, 5:, :])
-        mask_r = mask_n_residual - mask_d
-        # mask = x16[:, 0:1, :]
-        mask_d = mask_d.reshape(bs, mask_d.shape[1], mask_d.shape[2], time)
-        mask_n = mask_n.reshape(bs, mask_n.shape[1], mask_n.shape[2], time)
-        mask_r = mask_r.reshape(bs, mask_r.shape[1], mask_r.shape[2], time)
+        # mask_d, _ = calculate_PHM(x16[:, :5, :])
+        # mask_n, mask_n_residual = calculate_PHM(x16[:, 5:, :])
+        # mask_r = mask_n_residual - mask_d
+        # # mask = x16[:, 0:1, :]
+        # mask_d = mask_d.reshape(bs, mask_d.shape[1], mask_d.shape[2], time)
+        # mask_n = mask_n.reshape(bs, mask_n.shape[1], mask_n.shape[2], time)
+        # mask_r = mask_r.reshape(bs, mask_r.shape[1], mask_r.shape[2], time)
 
-        return mask_d.squeeze(1), mask_n.squeeze(1), mask_r.squeeze(1), h_f, h_t
+        return mask_d.squeeze(1), None, None, h_f, h_t# .squeeze(1)# , # mask_n.squeeze(1), mask_r.squeeze(1), h_f, h_t
 
 
 if __name__ == '__main__':
@@ -287,7 +305,7 @@ if __name__ == '__main__':
 
     print("input_shape:", x.shape)
     wave_d, wave_n, wave_r, _, _ = TRU(x.abs(), x.real, x.imag, h_f, h_t)
-    print("output_shape:", wave_d.shape, wave_n.shape, wave_r.shape)
+    print("output_shape:", wave_d.shape)# , wave_n.shape, wave_r.shape)
     # print(wave)
     # total params: 180336
     # input_shape: torch.Size([4, 257, 3])

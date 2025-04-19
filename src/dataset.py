@@ -29,6 +29,7 @@ class SignalDataset(ABC, Dataset):
                  chunk_size: int = 16_000 * 2,
                  stride: int = 16_000,
                  noise_dir: str =None,
+                 rir_dir: str = None,
                  room_square: Tuple[float, float] = (7., 14.),
                  room_height: Tuple[float, float] = (3., 4.),
                  return_noise: bool = False,
@@ -55,6 +56,12 @@ class SignalDataset(ABC, Dataset):
         if self.noise_dir is not None:
             self.noise_files = os.listdir(noise_dir)
             shuffle(self.noise_files)
+
+        self.rir_dir = rir_dir
+
+        if self.rir_dir is not None:
+            self.rir_files = os.listdir(rir_dir)
+            shuffle(self.rir_files)
 
         self.return_noise = return_noise
         self.return_rir = return_rir
@@ -119,6 +126,18 @@ class SignalDataset(ABC, Dataset):
     def __len__(self):
         return len(self.signal_files)
 
+    @staticmethod
+    def normalize_audio(target_signal, signal=None):
+        if (signal is not None) and torch.max(torch.abs(signal)) > 0:
+            scale = torch.max(torch.abs(signal))
+            target_signal = target_signal / scale
+            signal = signal / scale
+
+        if torch.max(torch.abs(target_signal)) > 0:
+            target_signal = target_signal / torch.max(torch.abs(target_signal))
+
+        return target_signal, signal
+
     def __getitem__(self, idx):
         if isinstance(self.snr, tuple):
             snr_db = randint(self.snr[0], self.snr[1])
@@ -131,6 +150,8 @@ class SignalDataset(ABC, Dataset):
         # noise, sr = librosa.load(filename_noise, sr=self.sr)
 
         target_signal, signal_sr = torchaudio.load(os.path.join(self.path, filename))
+        noise = None
+        rir_component = None
         # signal_sr, target_signal = wavfile.read(filename)
 
         if signal_sr != self.sr:
@@ -139,10 +160,22 @@ class SignalDataset(ABC, Dataset):
 
         # target_signal = torch.from_numpy(target_signal).float()
 
-        rir = self.simulate_rir_shoebox(target_signal)[None, :]
+        # rir = self.simulate_rir_shoebox(target_signal)[None, :]
 
-        rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='same', axes=-1))     # Почему full?
-        rir_component = rir_signal - target_signal
+        if self.rir_dir is not None:
+            filename_rir = choice(self.rir_files)
+            rir, rir_sr = torchaudio.load(os.path.join(self.rir_dir, filename_rir))
+
+            if rir_sr != self.sr:
+                resampler = Resample(rir_sr, self.sr)
+                rir = resampler(rir)
+
+            rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='full', axes=-1))
+            rir_signal = rir_signal[..., :target_signal.shape[-1]]
+
+            rir_component = rir_signal - target_signal
+        else:
+            rir_signal = target_signal
 
         if self.noise_dir is not None:
             filename_noise = choice(self.noise_files)
@@ -156,35 +189,46 @@ class SignalDataset(ABC, Dataset):
             noise = self.simulate_noise(rir_signal, noise, snr_db)
 
             output = rir_signal + noise
-            # if self.return_noise and self.return_rir:
-            if self.max_seq_len is not None:
-                output_padded = torch.zeros(1, self.max_seq_len)
-                output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
-
-                target_padded = torch.zeros(1, self.max_seq_len)
-                target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
-
-                noise_padded = None
-                if self.return_noise:
-                    noise_padded = torch.zeros(1, self.max_seq_len)
-                    noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
-
-                rir_padded = None
-                if self.return_rir:
-                    rir_padded = torch.zeros(1, self.max_seq_len)
-                    rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
-
-                return output_padded, target_padded, noise_padded, rir_padded
-
-            return output, target_signal, noise if self.return_noise else None, rir_component if self.return_rir else None
-
         else:
             output = rir_signal
+            # if self.return_noise and self.return_rir:
+            # if self.max_seq_len is not None:
+            #     output_padded = torch.zeros(1, self.max_seq_len)
+            #     output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
+            #
+            #     target_padded = torch.zeros(1, self.max_seq_len)
+            #     target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
+            #
+            #     noise_padded = None
+            #     if self.return_noise:
+            #         noise_padded = torch.zeros(1, self.max_seq_len)
+            #         noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
+            #
+            #     rir_padded = None
+            #     if self.return_rir:
+            #         rir_padded = torch.zeros(1, self.max_seq_len)
+            #         rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
+
+                # return output_padded, target_padded, noise_padded, rir_padded
+
+            # return output, target_signal, noise if self.return_noise else None, rir_component if self.return_rir else None
+
 
         # chunked_output = output.unfold(-1, self.chunk_size, self.stride)
         # chunked_target = target_signal.unfold(-1, self.chunk_size, self.stride)
 
         # chunked_output = self._preprocess(chunked_output)
+
+        # output = 2 * (output - output.min()) / (output.max() - output.min() + 1e-8) - 1
+        # print(target_signal, output)
+        target_signal, output = SignalDataset.normalize_audio(target_signal, output)
+
+        if noise is not None:
+            # noise = 2 * (noise - noise.min()) / (noise.max() - noise.min() + 1e-8) - 1
+            noise, _ = SignalDataset.normalize_audio(noise)
+        if rir_component is not None:
+            # rir_component = 2 * (rir_component - rir_component.min()) / (rir_component.max() - rir_component.min() + 1e-8) - 1
+            rir_component, _ = SignalDataset.normalize_audio(rir_component)
 
         if self.max_seq_len is not None:
             output_padded = torch.zeros(1, self.max_seq_len)
@@ -194,13 +238,18 @@ class SignalDataset(ABC, Dataset):
             target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
 
             rir_padded = None
-            if self.return_rir:
+            if (self.rir_dir is not None) and self.return_rir:
                 rir_padded = torch.zeros(1, self.max_seq_len)
                 rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
 
-            return output_padded, target_padded, rir_padded
+            noise_padded = None
+            if (self.noise_dir is not None) and self.return_noise:
+                noise_padded = torch.zeros(1, self.max_seq_len)
+                noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
 
-        return output, target_signal, rir_component if self.return_rir else None
+            return output_padded, target_padded, noise_padded, rir_padded
+
+        return output, target_signal, noise if self.return_noise else None, rir_component if self.return_rir else None
 
 
 class TRUNetDataset(SignalDataset):
@@ -210,6 +259,7 @@ class TRUNetDataset(SignalDataset):
                  chunk_size: int = 16_000 * 2,
                  stride: int = 16_000,
                  noise_dir: str = None,
+                 rir_dir: str = None,
                  room_square: Tuple[float, float] = (7., 14.),
                  room_height: Tuple[float, float] = (3., 4.),
                  return_noise: bool = False,
@@ -219,7 +269,7 @@ class TRUNetDataset(SignalDataset):
                  mode="train",):
 
         super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
-                                            stride=stride, noise_dir=noise_dir, room_square=room_square,
+                                            stride=stride, noise_dir=noise_dir, rir_dir=rir_dir, room_square=room_square,
                                             room_height=room_height, return_noise=return_noise,
                                             return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
                                             mode=mode)
