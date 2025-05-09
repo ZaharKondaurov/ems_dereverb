@@ -42,15 +42,21 @@ def calculate_PHM(
     mask_tf = beta * sigmoid_tf
     mask_tf_residual = beta * sigmoid_tf_residual
 
-    # Now that we have both masks, let's compute the triangle cosine law
-    cos_phase = (
-            (1.0 + mask_tf.square() - mask_tf_residual.square())
-            / (2.0 * mask_tf + eps))
-
-    cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
-
-    # sin_phase = torch.sin(torch.acos(cos_phase))
-    sin_phase = torch.sqrt(1 - cos_phase ** 2)
+    # # Now that we have both masks, let's compute the triangle cosine law
+    # cos_phase = (
+    #         (1.0 + mask_tf.square() - mask_tf_residual.square())
+    #         / (2.0 * mask_tf + eps))
+    #
+    # cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
+    # theta = torch.acos(cos_phase)
+    # theta = torch.clamp(theta, min=-torch.pi, max=torch.pi)
+    #
+    # cos_phase = torch.cos(theta)
+    # # cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
+    #
+    # # sin_phase = torch.sin(torch.acos(cos_phase))
+    # # sin_phase = torch.sqrt(1 - cos_phase ** 2 + eps)
+    # sin_phase = torch.sin(theta)
 
     # Now estimate the sign
     q0 = x_features[:, 3:4, :]
@@ -60,119 +66,14 @@ def calculate_PHM(
     # gamma = F.softmax(
     #     torch.stack([q0, q1], dim=-1) / tau, dim=-1
     # )
-    # # print(gamma.shape)
-    # gamma_0 = gamma[..., 0]
-    # gamma_1 = gamma[..., 1]
-    # print(x_features[:, 3:5, :].shape)
-    gamma = F.gumbel_softmax(x_features[..., 3:5, :], hard=True, dim=-2)
-    sign = gamma[..., 0:1, :] - gamma[..., 1:2, :] # sign = torch.sign(gamma_0 - gamma_1)
-    # print(gamma.shape, sign.shape, x_features.shape, cos_phase.shape)
-    # print(sign.shape)
-    # Finally, estimate the complex mask
-    # print(torch.isnan(mask_tf).any())
-    complex_mask = mask_tf * (cos_phase + sign * 1j * sin_phase)
-    complex_mask_residual = mask_tf_residual * (cos_phase + sign * 1j * sin_phase)
+    theta = torch.nn.functional.sigmoid(q0) * torch.pi
+    cos_phase = torch.cos(theta) # torch.nn.functional.sigmoid(q0)
+    sin_phase = torch.sqrt(1 - cos_phase ** 2 + eps)
+
+    complex_mask = mask_tf * (cos_phase + 1j * sin_phase)
+    complex_mask_residual = mask_tf_residual * (cos_phase + 1j * sin_phase)
     # print(complex_mask.shape)
     return complex_mask, complex_mask_residual
-
-
-def compute_phm_mask(net_output: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute the complex PHM (Phase-aware β-sigmoid Mask) for source separation.
-
-    Args:
-        net_output: Tensor of shape (T, 5, F), output from the neural network.
-            - dim=1 index 0: z^{(k)}_{t,f}, input to sigmoid for source mask
-            - dim=1 index 1: z^{(-k)}_{t,f}, input to sigmoid for rest mask
-            - dim=1 index 2: φ_{t,f}, input to softplus for β_{t,f}
-            - dim=1 index 3: logits for direction ξ_{t,f} ∈ {-1, 1}
-            - dim=1 index 4: (optional, unused in this code)
-        X_tf: Complex-valued input STFT of shape (T, F), dtype=torch.cfloat
-
-    Returns:
-        Estimated source Ŷ^{(k)}_{t,f}, shape (T, F), complex dtype.
-    """
-
-    # ----------------------
-    # Step 1: Unpack components from the network output
-    # ----------------------
-    z_k = net_output[:, 0, :]  # z^{(k)}_{t,f}, for source mask
-    z_neg_k = net_output[:, 1, :]  # z^{(-k)}_{t,f}, for complement mask
-    phi = net_output[:, 2, :]  # φ_{t,f}, used to compute β_{t,f}
-    direction_logits = net_output[:, 3, :]  # logits for ξ ∈ {-1, 1}
-
-    # ----------------------
-    # Step 2: Compute β_{t,f} using softplus to ensure β > 1
-    # ----------------------
-    # Softplus ensures positivity and allows the mask to extend beyond [0,1]
-    # β_{t,f} = 1 + softplus(φ)
-    beta_tf = 1 + F.softplus(phi)
-
-    # ----------------------
-    # Step 3: Compute magnitude masks using the β-sigmoid function
-    # ----------------------
-    # Magnitude masks are flexible sigmoid-based and scaled by β
-    sig_k = torch.sigmoid(z_k)  # σ(z^{(k)}_{t,f})
-    sig_neg_k = torch.sigmoid(z_neg_k)  # σ(z^{(-k)}_{t,f})
-    abs_M_k = beta_tf * sig_k  # |M^{(k)}_{t,f}|
-    abs_M_neg_k = beta_tf * sig_neg_k  # |M^{(-k)}_{t,f}|
-
-    # ----------------------
-    # Step 4: Enforce triangle inequality on |M^{(k)}| and |M^{(-k)}|
-    # ----------------------
-    # To ensure that the complex vectors can form a triangle:
-    # | |M^{(k)}| - |M^{(-k)}| | ≤ 1 and |M^{(k)}| + |M^{(-k)}| ≥ 1
-    # First inequality is enforced by clipping β using the inverse difference
-    eps = 1e-8  # To avoid division by zero
-    diff = (sig_k - sig_neg_k).abs().clamp(min=eps)
-    beta_upper_bound = 1.0 / diff
-    beta_tf_clipped = torch.minimum(beta_tf, beta_upper_bound)
-
-    # Recalculate masks using the clipped β
-    abs_M_k = beta_tf_clipped * sig_k
-    abs_M_neg_k = beta_tf_clipped * sig_neg_k
-
-    # ----------------------
-    # Step 5: Compute cos(Δθ_{t,f}^{(k)}) using the cosine law
-    # ----------------------
-    # We use the triangle formed by |X|, |Y^{(k)}| = |M^{(k)}||X|, |Y^{(-k)}| = |M^{(-k)}||X|
-    # Using cosine law: cos(Δθ) = (a^2 + c^2 - b^2) / 2ac
-    # But everything is in terms of masks, so we use:
-    # cos(Δθ) = (1 + |M^{(k)}|^2 - |M^{(-k)}|^2) / (2 |M^{(k)}|)
-    numerator = 1 + abs_M_k ** 2 - abs_M_neg_k ** 2
-    denominator = 2 * abs_M_k.clamp(min=eps)  # Avoid div by zero
-    cos_delta_theta = (numerator / denominator).clamp(-1 + eps, 1 - eps)
-
-    # ----------------------
-    # Step 6: Estimate sign direction ξ_{t,f} ∈ {-1, 1} using Gumbel-softmax
-    # ----------------------
-    # Used to resolve the sign ambiguity of sin(Δθ)
-    direction = F.gumbel_softmax(direction_logits, tau=1.0, hard=True)
-    # print(direction)
-    # Convert one-hot to ±1: direction[:,1] → 1, direction[:,0] → -1
-    # xi_tf = (direction[:, 1] * 2 - 1)[..., None]    # Что-то странное
-    direction = direction * 2 - 1
-
-    # ----------------------
-    # Step 7: Construct the complex phase mask: e^{jθ} = cos(Δθ) + j ξ sin(Δθ)
-    # ----------------------
-    sin_delta_theta = torch.sqrt(1 - cos_delta_theta ** 2)
-    phase_real = cos_delta_theta
-    # print(xi_tf.shape, sin_delta_theta.shape, direction.shape)
-    phase_imag = direction * sin_delta_theta
-    phase_mask = torch.complex(phase_real, phase_imag)
-
-    # ----------------------
-    # Step 8: Form final complex-valued mask M = |M| * e^{jθ}
-    # ----------------------
-    complex_mask = abs_M_k * phase_mask
-    complex_mask_res = abs_M_neg_k * phase_mask
-    # ----------------------
-    # Step 9: Apply the complex mask to the input mixture to estimate the source
-    # ----------------------
-    # Y_hat_k = complex_mask * X_tf  # Final estimated complex source
-
-    return complex_mask, complex_mask_res
 
 
 class StandardConv1d(nn.Module):
@@ -280,7 +181,8 @@ class LastTrCNN(nn.Module):
         self.LastTrCNN = nn.Sequential(
             nn.Conv1d(in_channels, out_channels, kernel_size=1),
             nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.SELU(inplace=True),
+            # nn.ReLU(inplace=True),
             nn.ConvTranspose1d(in_channels=out_channels,
                                out_channels=out_channels,
                                kernel_size=kernel_size,
@@ -405,21 +307,6 @@ class TRUNet(nn.Module):
         super(TRUNet, self).__init__()
         self.pcen = StatefulPCEN(smooth=0.025, trainable={"alpha": True, "delta": False, "root": True, "smooth": False})
 
-        # self.down1 = StandardConv1d(4, 16, 4, 2)
-        # self.down2 = DepthwiseSeparableConv1d(16, 32, 3, 1)
-        # self.down3 = DepthwiseSeparableConv1d(32, 32, 5, 2)
-        # self.down4 = DepthwiseSeparableConv1d(32, 32, 3, 1)
-        # self.down5 = DepthwiseSeparableConv1d(32, 32, 5, 2)
-        # self.down6 = DepthwiseSeparableConv1d(32, 64, 3, 2)
-        # self.FGRU = GRUBlock(64, 64, 64, bidirectional=True, batch_first=True)
-        # self.TGRU = GRUBlock(64, 128, 64, bidirectional=False, batch_first=False)
-        # self.up1 = FirstTrCNN(64, 32, 3, 2)
-        # self.up2 = TrCNN(64, 32, 5, 2)
-        # self.up3 = TrCNN(64, 32, 3, 1)
-        # self.up4 = TrCNN(64, 32, 5, 2)
-        # self.up5 = TrCNN(64, 32, 3, 1)
-        # self.up6 = LastTrCNN(48, 10, 5, 2)  # 5 kernel with dc bin, 4 kernel for cut dc
-
         self.down1 = StandardConv1d(4, 64, 5, 2)
         self.down2 = DepthwiseSeparableConv1d(64, 128, 3, 1)
         self.down3 = DepthwiseSeparableConv1d(128, 128, 5, 2)
@@ -437,19 +324,13 @@ class TRUNet(nn.Module):
 
         self.demod_p = DemodulatedPhase(n_fft=nfft, hop_length=hop)
 
-    def forward(self, x_abs, x_real, x_imag, h0_f, h0_t):
+    def forward(self, x_abs, x_ph, x_real, x_imag, h0_f, h0_t):
         # print(torch.isnan(x).any(), ' x')
 
         # x_abs = x.abs()
         pcen_x = self.pcen(x_abs.unsqueeze(1))[0]
         logx = taF.amplitude_to_DB(x_abs.unsqueeze(1), amin=1e-4, top_db=80.0, multiplier=20.0,
                                    db_multiplier=0.0)  # batch, channel, freq, time
-        # real = x.real
-        # imag = x.imag
-
-        # angle = x_spec.angle()
-        # demod = self.demod_p(x_spec)
-        # real_demod, imag_demod = demod_phase(angle)
 
         x0 = torch.cat((pcen_x, logx, x_real.unsqueeze(1), x_imag.unsqueeze(1)), dim=1)
         # print(x0.shape, ' x0')
@@ -484,30 +365,17 @@ class TRUNet(nn.Module):
         x14 = self.up4(x13, x3)
         x15 = self.up5(x14, x2)
         x16 = self.up6(x15, x1)
-        # mask_d = x16[:, 0, ...].reshape(x_abs.shape[0], 257, -1) * x_abs
-        # mask_n = x16[:, 1, ...].reshape(x_abs.shape[0], 257, -1) * x_abs
-        # mask_r = x16[:, 2, ...].reshape(x_abs.shape[0], 257, -1) * x_abs
-        # x16 = x16[:, 0, ...].reshape(x_abs.shape[0], 257, -1)
-        # print(x16.shape, x_abs.shape)
-        # mask_d = x16 * x_abs
 
-        # mask_d, _ = calculate_PHM(x16[:, :5, :])
-        # mask_n, mask_n_residual = calculate_PHM(x16[:, 5:, :])
-        # mask_d, _ = calculate_PHM(x16[:, :5, :])
-        # mask_n, mask_n_residual = calculate_PHM(x16[:, 5:, :])
-        # mask_r = mask_n_residual - mask_d
-        mask_d = x16[:, 0, ...].reshape(x_abs.shape[0], 257, -1)
-        mask_n = x16[:, 1, ...].reshape(x_abs.shape[0], 257, -1)
-        mask_r = x16[:, 2, ...].reshape(x_abs.shape[0], 257, -1)
-        # print(mask_d.shape)
-        # mask_d = mask_d.reshape(bs, mask_d.shape[1], mask_d.shape[2], time)
-        # mask_n = mask_n.reshape(bs, mask_n.shape[1], mask_n.shape[2], time)
-        # mask_r = mask_r.reshape(bs, mask_r.shape[1], mask_r.shape[2], time)
-        # mask_d = mask_d.reshape(bs, mask_d.shape[1], time)
-        # mask_n = mask_n.reshape(bs, mask_n.shape[1], time)
-        # mask_r = mask_r.reshape(bs, mask_r.shape[1], time)
-        # return mask_d.squeeze(1), mask_n.squeeze(1), mask_r.squeeze(1), h_f, h_t
-        return mask_d * x_abs, mask_n * x_abs, mask_r * x_abs, h_f, h_t
+        mask_d_complex, _ = calculate_PHM(x16[:, :5, :])
+        mask_n_complex, mask_n_residual_complex = calculate_PHM(x16[:, 5:, :])
+        mask_r_complex = mask_n_residual_complex - mask_d_complex
+        mask_d_complex = mask_d_complex.squeeze(1)
+
+        mask_d_complex = mask_d_complex.reshape(bs, mask_d_complex.shape[1], time)
+        mask_n_complex = mask_n_complex.reshape(bs, mask_d_complex.shape[1], time)
+        mask_r_complex = mask_r_complex.reshape(bs, mask_d_complex.shape[1], time)
+
+        return torch.polar(x_abs, x_ph) * mask_d_complex, mask_n_complex, mask_r_complex, h_f, h_t
 
 
 if __name__ == '__main__':
@@ -529,7 +397,7 @@ if __name__ == '__main__':
     )
 
     print("input_shape:", x.shape)
-    wave_d, wave_n, wave_r, _, _ = TRU(x.abs(), x.real, x.imag, h_f, h_t)
+    wave_d, wave_n, wave_r, _, _ = TRU(x.abs(), x.angle(), x.real, x.imag, h_f, h_t)
     print("output_shape:", wave_d.shape)# , wave_n.shape, wave_r.shape)
     # print(wave)
     # total params: 180336
