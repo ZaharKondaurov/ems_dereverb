@@ -42,34 +42,47 @@ def calculate_PHM(
     mask_tf = beta * sigmoid_tf
     mask_tf_residual = beta * sigmoid_tf_residual
 
-    # # Now that we have both masks, let's compute the triangle cosine law
-    # cos_phase = (
-    #         (1.0 + mask_tf.square() - mask_tf_residual.square())
-    #         / (2.0 * mask_tf + eps))
-    #
-    # cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
+    # Now that we have both masks, let's compute the triangle cosine law
+    cos_phase = (
+            (1.0 + mask_tf.square() - mask_tf_residual.square())
+            / (2.0 * mask_tf + eps))
+
+    cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
     # theta = torch.acos(cos_phase)
     # theta = torch.clamp(theta, min=-torch.pi, max=torch.pi)
-    #
+
     # cos_phase = torch.cos(theta)
-    # # cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
-    #
-    # # sin_phase = torch.sin(torch.acos(cos_phase))
-    # # sin_phase = torch.sqrt(1 - cos_phase ** 2 + eps)
+    # cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
+
+    # sin_phase = torch.sin(torch.acos(cos_phase))
+    sin_phase = torch.sqrt(1 - cos_phase ** 2 + eps)
+    sin_phase = torch.clamp(sin_phase, min=-1 + 1e-7, max=1 - 1e-7)
     # sin_phase = torch.sin(theta)
 
     # Now estimate the sign
-    q0 = x_features[:, 3:4, :]
-    q1 = x_features[:, 4:5, :]
+    # q0 = x_features[:, 3:4, :]
+    # q1 = x_features[:, 4:5, :]
     # print(q0.shape, q1.shape, torch.stack([q0, q1], dim=-2).shape)
     # tau = 1.
     # gamma = F.softmax(
     #     torch.stack([q0, q1], dim=-1) / tau, dim=-1
     # )
-    theta = torch.nn.functional.sigmoid(q0) * torch.pi
-    cos_phase = torch.cos(theta) # torch.nn.functional.sigmoid(q0)
-    sin_phase = torch.sqrt(1 - cos_phase ** 2 + eps)
-
+    # theta = torch.nn.functional.sigmoid(q0) * torch.pi
+    # cos_phase = torch.cos(theta)  # torch.nn.functional.sigmoid(q0)
+    # cos_phase = torch.clamp(cos_phase, min=-1 + 1e-7, max=1 - 1e-7)
+    # sin_phase = torch.sqrt(1 - cos_phase ** 2 + eps)
+    # sin_phase = torch.clamp(sin_phase, min=-1 + 1e-7, max=1 - 1e-7)
+    #
+    # tmp_1 = torch.isnan(mask_tf).sum().item()
+    # tmp_2 = torch.isnan(cos_phase).sum().item()
+    # tmp_3 = torch.isnan(sin_phase).sum().item()
+    #
+    # if tmp_1 > 0:
+    #     print("Num of nuns in mask_tf: ", tmp_1)
+    # if tmp_2 > 0:
+    #     print("Num of nuns in cos_phase: ", tmp_2)
+    # if tmp_3 > 0:
+    #     print("Num of nuns in sin_phase: ", tmp_3)
     complex_mask = mask_tf * (cos_phase + 1j * sin_phase)
     complex_mask_residual = mask_tf_residual * (cos_phase + 1j * sin_phase)
     # print(complex_mask.shape)
@@ -303,9 +316,11 @@ class DemodulatedPhase(nn.Module):
         return demod_phase
 
 class TRUNet(nn.Module):
-    def __init__(self, nfft=512, hop=128, win='hann'):
+    def __init__(self, nfft=512, hop=128, sr=16_000, win='hann'):
         super(TRUNet, self).__init__()
-        self.pcen = StatefulPCEN(smooth=0.025, trainable={"alpha": True, "delta": False, "root": True, "smooth": False})
+        self.hop = 128
+        self.sr = sr
+        self.pcen = StatefulPCEN(smooth=0.025, trainable={"alpha": True, "delta": True, "root": True, "smooth": True})
 
         self.down1 = StandardConv1d(4, 64, 5, 2)
         self.down2 = DepthwiseSeparableConv1d(64, 128, 3, 1)
@@ -320,19 +335,62 @@ class TRUNet(nn.Module):
         self.up3 = TrCNN(192, 64, 3, 1)
         self.up4 = TrCNN(192, 64, 5, 2)
         self.up5 = TrCNN(192, 64, 3, 1)
-        self.up6 = LastTrCNN(128, 10, 5, 2)
+        self.up6 = LastTrCNN(128, 1, 5, 2)
 
         self.demod_p = DemodulatedPhase(n_fft=nfft, hop_length=hop)
 
-    def forward(self, x_abs, x_ph, x_real, x_imag, h0_f, h0_t):
+    @staticmethod
+    def compute_demodulated_phase_torch(complex_spectrogram, hop_length, sample_rate):
+        """
+        Compute demodulated phase from a complex STFT spectrogram.
+
+        Parameters:
+        - complex_spectrogram: torch.Tensor of shape (B, F, T), complex dtype
+        - hop_length: int, hop size used in the STFT
+        - sample_rate: int, audio sample rate in Hz
+
+        Returns:
+        - demod_phase: torch.Tensor of shape (B, F, T), real-valued
+        """
+        # Extract wrapped phase
+        phase = torch.angle(complex_spectrogram)  # (B, F, T)
+
+        # Unwrap phase over time (dim=2)
+        phase_diff = torch.diff(phase, dim=2)
+        phase_diff = (phase_diff + torch.pi) % (2 * torch.pi) - torch.pi
+        unwrapped_phase = torch.cat(
+            [phase[:, :, :1], phase[:, :, :1] + torch.cumsum(phase_diff, dim=2)],
+            dim=2
+        )  # (B, F, T)
+
+        # Time and frequency axes
+        B, F, T = complex_spectrogram.shape
+        times = torch.arange(T, device=phase.device).float() * hop_length / sample_rate  # (T,)
+        freqs = torch.linspace(0, sample_rate / 2, F, device=phase.device).float()  # (F,)
+
+        # Expected linear phase: 2π * freq * time
+        expected_phase = 2 * torch.pi * freqs.unsqueeze(-1) * times.unsqueeze(0)  # (F, T)
+        expected_phase = expected_phase.unsqueeze(0)  # (1, F, T) for batch broadcasting
+
+        # Compute demodulated phase
+        demod_phase = unwrapped_phase - expected_phase  # (B, F, T)
+
+        return demod_phase
+
+    def forward(self, x_spec, h0_f, h0_t):
         # print(torch.isnan(x).any(), ' x')
 
         # x_abs = x.abs()
-        pcen_x = self.pcen(x_abs.unsqueeze(1))[0]
-        logx = taF.amplitude_to_DB(x_abs.unsqueeze(1), amin=1e-4, top_db=80.0, multiplier=20.0,
-                                   db_multiplier=0.0)  # batch, channel, freq, time
+        pcen_x = self.pcen(x_spec.abs().unsqueeze(1))[0]
+        # logx = taF.amplitude_to_DB(x_abs.unsqueeze(1), amin=1e-4, top_db=80.0, multiplier=20.0,
+        #                            db_multiplier=0.0)  # batch, channel, freq, time
+        logx = torch.log1p(x_spec.abs().unsqueeze(1))
 
-        x0 = torch.cat((pcen_x, logx, x_real.unsqueeze(1), x_imag.unsqueeze(1)), dim=1)
+        demod_phase = TRUNet.compute_demodulated_phase_torch(x_spec, self.hop, self.sr)
+
+        # x0 = torch.cat((pcen_x, logx, x_real.unsqueeze(1), x_imag.unsqueeze(1)), dim=1)
+        x0 = torch.cat((pcen_x, logx, torch.cos(demod_phase).unsqueeze(1), torch.sin(demod_phase).unsqueeze(1)),
+                       dim=1)
         # print(x0.shape, ' x0')
         bs = x0.shape[0]
         time = x0.shape[-1]
@@ -366,16 +424,21 @@ class TRUNet(nn.Module):
         x15 = self.up5(x14, x2)
         x16 = self.up6(x15, x1)
 
-        mask_d_complex, _ = calculate_PHM(x16[:, :5, :])
-        mask_n_complex, mask_n_residual_complex = calculate_PHM(x16[:, 5:, :])
-        mask_r_complex = mask_n_residual_complex - mask_d_complex
-        mask_d_complex = mask_d_complex.squeeze(1)
+        mask_d = torch.abs(x16.reshape(bs, -1, time))
 
-        mask_d_complex = mask_d_complex.reshape(bs, mask_d_complex.shape[1], time)
-        mask_n_complex = mask_n_complex.reshape(bs, mask_d_complex.shape[1], time)
-        mask_r_complex = mask_r_complex.reshape(bs, mask_d_complex.shape[1], time)
+        # mask_d_complex, _ = calculate_PHM(x16[:, :5, :])
+        # mask_n_complex, mask_n_residual_complex = calculate_PHM(x16[:, 5:, :])
+        # mask_r_complex = mask_n_residual_complex - mask_d_complex
+        # mask_d_complex = mask_d_complex.squeeze(1)
+        #
+        # mask_d_complex = mask_d_complex.reshape(bs, mask_d_complex.shape[1], time)
+        # # mask_d_complex_abs = torch.abs(x16[:, 6:7, :].reshape(bs, mask_d_complex.shape[1], time))
+        # # print(mask_d_complex_angle.shape, mask_d_complex_abs.shape)
+        # mask_n_complex = mask_n_complex.reshape(bs, mask_d_complex.shape[1], time)
+        # mask_r_complex = mask_r_complex.reshape(bs, mask_d_complex.shape[1], time)
 
-        return torch.polar(x_abs, x_ph) * mask_d_complex, mask_n_complex, mask_r_complex, h_f, h_t
+        # return torch.polar(x_abs, x_ph) * mask_d_complex, mask_n_complex, mask_r_complex, h_f, h_t
+        return mask_d, mask_d, mask_d, h_f, h_t
 
 
 if __name__ == '__main__':
@@ -397,7 +460,7 @@ if __name__ == '__main__':
     )
 
     print("input_shape:", x.shape)
-    wave_d, wave_n, wave_r, _, _ = TRU(x.abs(), x.angle(), x.real, x.imag, h_f, h_t)
+    wave_d, wave_n, wave_r, _, _ = TRU(x, h_f, h_t)
     print("output_shape:", wave_d.shape)# , wave_n.shape, wave_r.shape)
     # print(wave)
     # total params: 180336
