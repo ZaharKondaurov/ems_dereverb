@@ -13,7 +13,7 @@ from torch.utils.data import Dataset
 import librosa
 import pyroomacoustics as pra
 
-from typing import Union, Tuple
+from typing import Union, Tuple, Callable, List, Dict
 
 from random import shuffle, randint, choice, uniform
 
@@ -25,7 +25,7 @@ CEILING_KEYWORDS = ["ceiling_plasterboard", "ceiling_fissured_tile", "ceiling_me
 class SignalDataset(ABC, Dataset):
 
     def __init__(self, data_dir_path: str, sr: int = 16_000,
-                 snr: Union[int, Tuple[int, int]] = 0,
+                 snr: Union[int, Tuple[int, int], List[int]] = 0,
                  chunk_size: int = 16_000 * 2,
                  stride: int = 16_000,
                  noise_dir: str =None,
@@ -36,11 +36,13 @@ class SignalDataset(ABC, Dataset):
                  return_rir: bool = False,
                  max_seq_len: int = None,
                  partition: int = None,
+                 noise_proba: float = 1.0,
+                 rir_proba: float = 1.0,
                  mode="train"):
 
         self.path = data_dir_path
         # self.signal_files = [x for x in os.listdir(self.path) if x[-3:] == "wav"]
-        self.signal_files = [os.path.join(r, fs) for r, d, fs in os.walk(self.path) for f in fs if f[-3:] == "wav"] #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
+        self.signal_files = [os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if f[-3:] == "wav"] #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
         if partition is not None:
             self.signal_files = self.signal_files[:partition]
         shuffle(self.signal_files)
@@ -55,18 +57,21 @@ class SignalDataset(ABC, Dataset):
         self.noise_dir = noise_dir
 
         if self.noise_dir is not None:
-            self.noise_files = os.listdir(noise_dir)
+            self.noise_files = [os.path.join(r, f) for r, d, fs in os.walk(self.noise_dir) for f in fs if f[-3:] == "wav"] # os.listdir(noise_dir)
             shuffle(self.noise_files)
 
         self.rir_dir = rir_dir
 
         if self.rir_dir is not None:
-            self.rir_files = os.listdir(rir_dir)
+            self.rir_files = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"] # os.listdir(rir_dir)
             shuffle(self.rir_files)
 
         self.return_noise = return_noise
         self.return_rir = return_rir
         self.max_seq_len = max_seq_len
+
+        self.noise_proba = noise_proba
+        self.rir_proba = rir_proba
 
     # @staticmethod
     # def simulate_noise(signal: torch.Tensor, noise: torch.Tensor, snr_db: int) -> torch.Tensor:
@@ -178,12 +183,16 @@ class SignalDataset(ABC, Dataset):
     def __getitem__(self, idx):
         if isinstance(self.snr, tuple):
             snr_db = randint(self.snr[0], self.snr[1])
-        else:
+        elif isinstance(self.snr, int):
             snr_db = self.snr
+        elif isinstance(self.snr, list):
+            snr_db = choice(self.snr)
+        else:
+            assert "Invalid snr!"
 
         filename = self.signal_files[idx]
 
-        target_signal, signal_sr = torchaudio.load(os.path.join(self.path, filename))
+        target_signal, signal_sr = torchaudio.load(filename)
         # print(target_signal.shape)
         noise = None
         rir_component = None
@@ -192,9 +201,9 @@ class SignalDataset(ABC, Dataset):
             resampler = Resample(signal_sr, self.sr)
             target_signal = resampler(target_signal)
 
-        if self.rir_dir is not None:
+        if self.rir_dir is not None and uniform(0, 1) < self.rir_proba:
             filename_rir = choice(self.rir_files)
-            rir, rir_sr = torchaudio.load(os.path.join(self.rir_dir, filename_rir))
+            rir, rir_sr = torchaudio.load(filename_rir)
             if rir.shape[0] > 1:
                 rir = torch.from_numpy(librosa.to_mono(rir.numpy()))[None, :]
             if rir_sr != self.sr:
@@ -210,9 +219,9 @@ class SignalDataset(ABC, Dataset):
         else:
             rir_signal = target_signal
 
-        if self.noise_dir is not None:
+        if self.noise_dir is not None and uniform(0, 1) < self.noise_proba:
             filename_noise = choice(self.noise_files)
-            noise, noise_sr = torchaudio.load(os.path.join(self.noise_dir, filename_noise))
+            noise, noise_sr = torchaudio.load(filename_noise)
             # print(noise.shape)
             if noise.shape[0] > 1:
                 noise = torch.from_numpy(librosa.to_mono(noise.numpy()))[None, :]
@@ -261,7 +270,7 @@ class SignalDataset(ABC, Dataset):
 class TRUNetDataset(SignalDataset):
 
     def __init__(self, data_dir_path: str, sr: int = 16_000,
-                 snr: Union[int, Tuple[int, int]] = 0,
+                 snr: Union[int, Tuple[int, int], List[int]] = 0,
                  chunk_size: int = 16_000 * 2,
                  stride: int = 16_000,
                  noise_dir: str = None,
@@ -272,13 +281,15 @@ class TRUNetDataset(SignalDataset):
                  return_rir: bool = False,
                  max_seq_len: int = None,
                  partition: int = None,
+                 noise_proba: float = 1.0,
+                 rir_proba: float = 1.0,
                  mode="train",):
 
         super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
                                             stride=stride, noise_dir=noise_dir, rir_dir=rir_dir, room_square=room_square,
                                             room_height=room_height, return_noise=return_noise,
                                             return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
-                                            mode=mode)
+                                            noise_proba=noise_proba, rir_proba=rir_proba, mode=mode)
 
     @staticmethod
     def _preprocess(signal: torch.Tensor) -> torch.Tensor:

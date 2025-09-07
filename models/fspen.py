@@ -1,10 +1,11 @@
 import torch
 
 from torch import nn, Tensor
+import torch.autograd.profiler as profiler
 from models.en_decoder import FullBandEncoderBlock, FullBandDecoderBlock
 from models.en_decoder import SubBandEncoderBlock, SubBandDecoderBlock
 from models.sequence_modules import DualPathExtensionRNN
-from src.fspen_configs import TrainConfig
+from src.fspen_configs import TrainConfig, TrainConfigLarge
 
 from functools import partial
 from collections import OrderedDict
@@ -20,7 +21,8 @@ class FullBandEncoder(nn.Module):
             self.full_band_encoder.append(FullBandEncoderBlock(**conv_parameter))
             last_channels = conv_parameter["out_channels"]
 
-        self.global_features = nn.Conv1d(in_channels=last_channels, out_channels=last_channels, kernel_size=1, stride=1)
+        global_feat_conv = configs.full_band_encoder["encoder1"]["conv"]
+        self.global_features = global_feat_conv(in_channels=last_channels, out_channels=last_channels, kernel_size=1, stride=1)
 
     def forward(self, complex_spectrum: Tensor):
         """
@@ -55,7 +57,7 @@ class SubBandEncoder(nn.Module):
         for encoder in self.sub_band_encoders:
             encode_out = encoder(amplitude_spectrum)
             sub_band_encodes.append(encode_out)
-
+            # print(encode_out.shape)
         local_feature = torch.cat(sub_band_encodes, dim=2)  # feature cat
 
         return sub_band_encodes, local_feature
@@ -116,15 +118,16 @@ class FullSubPathExtension(nn.Module):
         self.feature_merge_layer = nn.Sequential(
             nn.Linear(in_features=merge_channels, out_features=merge_channels//compress_rate),
             nn.ELU(),
-            nn.Conv1d(in_channels=merge_bands, out_channels=merge_bands//compress_rate, kernel_size=1, stride=1)
+            merge_split["conv"](in_channels=merge_bands, out_channels=merge_bands//compress_rate, kernel_size=1, stride=1)
         )
 
+        # with profiler.record_function("Create GRU"):
         self.dual_path_extension_rnn_list = nn.ModuleList()
         for _ in range(configs.dual_path_extension["num_modules"]):
             self.dual_path_extension_rnn_list.append(DualPathExtensionRNN(**configs.dual_path_extension["parameters"]))
 
         self.feature_split_layer = nn.Sequential(
-            nn.Conv1d(in_channels=merge_bands//compress_rate, out_channels=merge_bands, kernel_size=1, stride=1),
+            merge_split["conv"](in_channels=merge_bands//compress_rate, out_channels=merge_bands, kernel_size=1, stride=1),
             nn.Linear(in_features=merge_channels//compress_rate, out_features=merge_channels),
             nn.ELU()
         )
@@ -143,11 +146,14 @@ class FullSubPathExtension(nn.Module):
         """
         batch, frames, channels, frequency = in_complex_spectrum.shape
         # 16 // 8 for trainconfig
-        hidden_state = [[torch.randn(1, batch * 32, 16 // 8, device=in_complex_spectrum.device) for _ in range(8)] for _ in range(self.num_rnn_modules)]
+        # with profiler.record_function("Hidden state gen"):
+        hidden_state = [[torch.randn(1, batch * 32, 16 // 8, device=in_complex_spectrum.device) for _ in range(8)] for _ in range(self.num_rnn_modules)] # for rnn2 batch * 32 // 2
         complex_spectrum = torch.reshape(in_complex_spectrum, shape=(batch * frames, channels, frequency))
         amplitude_spectrum = torch.reshape(in_amplitude_spectrum, shape=(batch*frames, 1, frequency))
         # print("Complex Spectrum", complex_spectrum.shape)
+        # with profiler.record_function("Full band encoder"):
         full_band_encode_outs, global_feature = self.full_band_encoder(complex_spectrum)
+        # with profiler.record_function("Sub band encoder"):
         sub_band_encode_outs, local_feature = self.sub_band_encoder(amplitude_spectrum)
         # print(f"FBE out:", full_band_encode_outs.shape, "SBE out:", sub_band_encode_outs.shape)
         # print(global_feature.shape, local_feature.shape)
@@ -160,6 +166,7 @@ class FullSubPathExtension(nn.Module):
         merge_feature = torch.reshape(merge_feature, shape=(batch, frames, channels, frequency))
         merge_feature = torch.permute(merge_feature, dims=(0, 3, 1, 2)).contiguous()
         # (batch, frequency, frames, channels)
+        # with profiler.record_function("RNN layer"):
         out_hidden_state = list()
         # print(f"RNN in:", merge_feature.shape)
         for idx, rnn_layer in enumerate(self.dual_path_extension_rnn_list):
@@ -175,13 +182,17 @@ class FullSubPathExtension(nn.Module):
         # print(f"Split layer out:", split_feature.shape)
         # print(f"FBD in:", split_feature[..., 0].shape,)# full_band_encode_outs.shape)
         # print(f"SBD in:", split_feature[..., 1].shape,)# sub_band_encode_outs.shape)
+        # with profiler.record_function("Full band decoder"):
+        # print(split_feature[..., 0].shape)
         full_band_mask = self.full_band_decoder(split_feature[..., 0], full_band_encode_outs)
+        # with profiler.record_function("Sub band decoder"):
         sub_band_mask = self.sub_band_decoder(split_feature[..., 1], sub_band_encode_outs)
 
         full_band_mask = torch.reshape(full_band_mask, shape=(batch, frames, 2, -1))
         sub_band_mask = torch.reshape(sub_band_mask, shape=(batch, frames, 1, -1))
 
         # Zero padding in the DC signal part removes the DC component
+        # with profiler.record_function("Mask padding"):
         full_band_mask = self.mask_padding(full_band_mask)
         sub_band_mask = self.mask_padding(sub_band_mask)
         # print(in_complex_spectrum.shape, full_band_mask.shape)
@@ -191,7 +202,6 @@ class FullSubPathExtension(nn.Module):
 
         full_band_out[:, :, 0:1, :] = (full_band_out[:, :, 0:1, :] + sub_band_out) / 2
         return full_band_out, out_hidden_state
-
 
 
 class ResidualBlock(nn.Module):
@@ -324,7 +334,51 @@ class DiscriminatorModel(nn.Module):
 
 
 if __name__ == '__main__':
-    discriminator = DiscriminatorModel(c_in=2)
-    x = torch.randn((1, 256, 2, 256))
-    y = discriminator(x)
-    print(y.shape)
+    # con = torch.nn.ConvTranspose1d(in_channels=1, out_channels=1, kernel_size=3, stride=1, dilation=1, padding=2, bias=False)
+    # nn.init.ones_(con.weight)
+    # x = torch.tensor([[[1., 2., 3., 4., 5.]]])
+    # print(x)
+    # print(con(x))
+    # tensor([[[1., 3., 5., 7., 9., 5.]]], grad_fn=<ConvolutionBackward0>)
+
+    # discriminator = DiscriminatorModel(c_in=2)
+    # x = torch.randn((1, 256, 2, 256))
+    # y = discriminator(x)
+    # print(y.shape)
+    x1 = torch.randn([1, 569, 2, 257])
+    x2 = torch.randn([1, 569, 1, 257])
+
+    configs = TrainConfigLarge()
+    fspen = FullSubPathExtension(configs=configs)
+
+    output, _ = fspen(x1, x2)
+    print(output.size())
+    # output: torch.Size([1, 569, 2, 257])
+    # Regular FullBandEnc:
+    # torch.Size([569, 4, 128])
+    # torch.Size([569, 16, 64])
+    # torch.Size([569, 64, 32])
+    # Causal FullBandEnc:
+    # torch.Size([569, 4, 128])
+    # torch.Size([569, 16, 64])
+    # torch.Size([569, 64, 32])
+    #
+    # Causal FBD in: torch.Size([569, 64, 32])
+    # Regular FBD in: torch.Size([569, 64, 32])
+    # Causal torch.Size([569, 16, 76]) torch.Size([569, 16, 64])
+    # Regular
+    # decode torch.Size([569, 64, 32]) torch.Size([569, 64, 32])
+    # decode torch.Size([569, 16, 64]) torch.Size([569, 16, 64])
+    # decode torch.Size([569, 4, 128]) torch.Size([569, 4, 128])
+    #
+    # Causal FBD in: torch.Size([569, 64, 32])
+    # decode torch.Size([569, 64, 32]) torch.Size([569, 64, 32])
+    # decode conv out: torch.Size([569, 64, 32])
+    # decode convT out: torch.Size([569, 16, 76])
+    # decode torch.Size([569, 16, 76]) torch.Size([569, 16, 64])
+
+    # Regular FBD in: torch.Size([569, 64, 32])
+    # decode torch.Size([569, 64, 32]) torch.Size([569, 64, 32])
+    # decode conv out: torch.Size([569, 64, 32])
+    # decode convT out: torch.Size([569, 16, 64])
+    # decode torch.Size([569, 16, 64]) torch.Size([569, 16, 64])

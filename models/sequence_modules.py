@@ -11,6 +11,7 @@ from typing import List
 
 import torch
 from torch import nn, Tensor
+from torch.autograd import profiler
 
 
 class GroupRNN(nn.Module):
@@ -46,6 +47,7 @@ class GroupRNN(nn.Module):
         out_states = []
         batch, steps, _ = inputs.shape
 
+        # with profiler.record_function("GRU module"):
         inputs = torch.reshape(inputs, shape=(batch, steps, self.groups, -1))  # (batch, steps, groups, width)
         for idx, rnn in enumerate(self.rnn_list):
             out, state = rnn(inputs[:, :, idx, :], hidden_state[idx])
@@ -67,8 +69,8 @@ class DualPathExtensionRNN(nn.Module):
         assert rnn_type in ["RNN", "GRU", "LSTM"], f"rnn_type should be RNN/GRU/LSTM, but got {rnn_type}!"
 
         self.intra_chunk_rnn = getattr(nn, rnn_type)(input_size=input_size, hidden_size=intra_hidden_size,
-                                                     num_layers=1, bidirectional=True, batch_first=True)
-        self.intra_chunk_fc = nn.Linear(in_features=intra_hidden_size*2, out_features=input_size)
+                                                     num_layers=1, bidirectional=True, batch_first=True) # for reduced bidirectional=False
+        self.intra_chunk_fc = nn.Linear(in_features=intra_hidden_size*2, out_features=input_size) # for reduced in_features=intra_hidden_size
         self.intra_chunk_norm = nn.LayerNorm(normalized_shape=input_size, elementwise_affine=True)
 
         self.inter_chunk_rnn = GroupRNN(input_size=input_size, hidden_size=inter_hidden_size, groups=groups,
@@ -86,6 +88,7 @@ class DualPathExtensionRNN(nn.Module):
         B, F, T, N = inputs.shape
         intra_out = torch.transpose(inputs, dim0=1, dim1=2).contiguous()  # (B, T, F, N)
         intra_out = torch.reshape(intra_out, shape=(B * T, F, N))
+        # with profiler.record_function("Intra RNN forward"):
         intra_out, _ = self.intra_chunk_rnn(intra_out)
         intra_out = self.intra_chunk_fc(intra_out)  # (B, T, F, N)
         intra_out = torch.reshape(intra_out, shape=(B, T, F, N))
@@ -95,6 +98,7 @@ class DualPathExtensionRNN(nn.Module):
         intra_out = inputs + intra_out  # residual add
 
         inter_out = torch.reshape(intra_out, shape=(B * F, T, N))  # (B*F, T, N)
+        # with profiler.record_function("Inter RNN forward"):
         inter_out, hidden_state = self.inter_chunk_rnn(inter_out, hidden_state)
         inter_out = torch.reshape(inter_out, shape=(B, F, T, -1))  # (B, F, T, groups * N)
         inter_out = self.inter_chunk_fc(inter_out)  # (B, F, T, N)
