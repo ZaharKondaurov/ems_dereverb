@@ -5,7 +5,7 @@ import torch.autograd.profiler as profiler
 from models.en_decoder import FullBandEncoderBlock, FullBandDecoderBlock
 from models.en_decoder import SubBandEncoderBlock, SubBandDecoderBlock
 from models.sequence_modules import DualPathExtensionRNN
-from src.fspen_configs import TrainConfig, TrainConfigLarge
+from src.fspen_configs import TrainConfig, TrainConfigLarge, TrainConfigLarge1
 
 from functools import partial
 from collections import OrderedDict
@@ -137,7 +137,7 @@ class FullSubPathExtension(nn.Module):
 
         self.mask_padding = nn.ConstantPad2d(padding=(1, 0, 0, 0), value=0.0)
 
-    def forward(self, in_complex_spectrum: Tensor, in_amplitude_spectrum: Tensor):
+    def forward(self, in_complex_spectrum: Tensor, in_amplitude_spectrum: Tensor, hidden_state: list):
         """
         :param in_amplitude_spectrum: (batch, frames, 1, frequency)
         :param hidden_state:
@@ -147,7 +147,7 @@ class FullSubPathExtension(nn.Module):
         batch, frames, channels, frequency = in_complex_spectrum.shape
         # 16 // 8 for trainconfig
         # with profiler.record_function("Hidden state gen"):
-        hidden_state = [[torch.randn(1, batch * 32, 16 // 8, device=in_complex_spectrum.device) for _ in range(8)] for _ in range(self.num_rnn_modules)] # for rnn2 batch * 32 // 2
+        # hidden_state = [[torch.randn(1, batch * 32, 16 // 8, device=in_complex_spectrum.device) for _ in range(8)] for _ in range(self.num_rnn_modules)] # for rnn2 batch * 32 // 2
         complex_spectrum = torch.reshape(in_complex_spectrum, shape=(batch * frames, channels, frequency))
         amplitude_spectrum = torch.reshape(in_amplitude_spectrum, shape=(batch*frames, 1, frequency))
         # print("Complex Spectrum", complex_spectrum.shape)
@@ -332,27 +332,47 @@ class DiscriminatorModel(nn.Module):
         x = self.seq(x)
         return x
 
+# Input [(0, 16)]: torch.Size([569, 1, 257])
+# Sub spectrum [(0, 16)]: torch.Size([569, 1, 16])
+# Output [(0, 16)]: torch.Size([569, 64, 8])
+
+# Input [(16, 34)]: torch.Size([569, 1, 257])
+# Sub spectrum [(16, 34)]: torch.Size([569, 1, 18])
+# Output [(16, 34)]: torch.Size([569, 64, 6])
+
+# Input [(34, 70)]: torch.Size([569, 1, 257])
+# Sub spectrum [(34, 70)]: torch.Size([569, 1, 36])
+# Output [(34, 70)]: torch.Size([569, 64, 6])
+
+# Input [(70, 136)]: torch.Size([569, 1, 257])
+# Sub spectrum [(70, 136)]: torch.Size([569, 1, 66])
+# Output [(70, 136)]: torch.Size([569, 64, 6])
+
+# Input [(136, 257)]: torch.Size([569, 1, 257])
+# Sub spectrum [(136, 257)]: torch.Size([569, 1, 121])
+# Output [(136, 257)]: torch.Size([569, 64, 6])
 
 if __name__ == '__main__':
-    # con = torch.nn.ConvTranspose1d(in_channels=1, out_channels=1, kernel_size=3, stride=1, dilation=1, padding=2, bias=False)
-    # nn.init.ones_(con.weight)
-    # x = torch.tensor([[[1., 2., 3., 4., 5.]]])
-    # print(x)
-    # print(con(x))
-    # tensor([[[1., 3., 5., 7., 9., 5.]]], grad_fn=<ConvolutionBackward0>)
-
     # discriminator = DiscriminatorModel(c_in=2)
     # x = torch.randn((1, 256, 2, 256))
     # y = discriminator(x)
     # print(y.shape)
+
+    # con = torch.nn.Conv1d(in_channels=1, out_channels=1, kernel_size=3, stride=2, dilation=1, padding=0, bias=False)
+    # nn.init.ones_(con.weight)
+    # x = torch.tensor([[[1., 2., 3., 4., 5., 6.]]])
+    # print(x)
+    # print(con(x))
+    # tensor([[[1., 3., 5., 7., 9., 5.]]], grad_fn=<ConvolutionBackward0>)
+
     x1 = torch.randn([1, 569, 2, 257])
     x2 = torch.randn([1, 569, 1, 257])
-
-    configs = TrainConfigLarge()
+    configs = TrainConfigLarge1()
     fspen = FullSubPathExtension(configs=configs)
-
     output, _ = fspen(x1, x2)
     print(output.size())
+    # torch.Size([569, 64, 32]) torch.Size([569, 64, 32])
+
     # output: torch.Size([1, 569, 2, 257])
     # Regular FullBandEnc:
     # torch.Size([569, 4, 128])

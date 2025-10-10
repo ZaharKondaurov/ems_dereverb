@@ -78,14 +78,47 @@ class SubBandEncoderBlock(nn.Module):
         :param amplitude_spectrum: (batch*frames, channels, frequency)
         :return:
         """
+        # print(f"Input [{self.start_frequency, self.end_frequency}]:", amplitude_spectrum.shape)
         sub_spectrum = amplitude_spectrum[:, :, self.start_frequency:self.end_frequency]
+        # print(f"Sub spectrum [{self.start_frequency, self.end_frequency}]:", sub_spectrum.shape)
         # print("encoder in:", sub_spectrum.shape)
         sub_spectrum = self.conv(sub_spectrum)  # (batch*frames, out_channels, sub_bands)
+        if torch.isnan(sub_spectrum).any().item() is True:
+            print(f"[{(self.start_frequency, self.end_frequency)}] Conv has NaNs: ", torch.isnan(sub_spectrum).any().item())
         # print("encoder out:", sub_spectrum.shape)
         sub_spectrum = self.activate(sub_spectrum)
-
+        if torch.isnan(sub_spectrum).any().item() is True:
+            print(f"[{(self.start_frequency, self.end_frequency)}] After activation: ", torch.isnan(sub_spectrum).any().item())
+        # print(f"Output [{self.start_frequency, self.end_frequency}]:", sub_spectrum.shape)
         return sub_spectrum
 
+
+# class SubBandDecoderBlock(nn.Module):
+#     def __init__(self, in_features: int, out_features: int, start_idx: int, end_idx: int):
+#         super().__init__()
+#         self.start_idx = start_idx
+#         self.end_idx = end_idx
+#         self.fc = nn.Linear(in_features=in_features, out_features=out_features)
+#         self.activate = nn.ReLU()
+
+#     def forward(self, encode_amplitude_spectrum: Tensor, decode_amplitude_spectrum: Tensor):
+#         """
+
+#         :param encode_amplitude_spectrum: (batch * frames, channels, sub_bands)
+#         :param decode_amplitude_spectrum: (batch * frames, channels, sub_bands)
+#         :return:
+#         """
+#         encode_amplitude_spectrum = encode_amplitude_spectrum[:, :, self.start_idx: self.end_idx]
+#         print("SubBand decoder input: ", encode_amplitude_spectrum.shape, decode_amplitude_spectrum.shape)
+#         spectrum = torch.cat([encode_amplitude_spectrum, decode_amplitude_spectrum], dim=1)  # channels cat
+#         spectrum = torch.transpose(spectrum, dim0=1, dim1=2).contiguous()   # (*, bands, channels)
+#         print("SubBand decoder input: ", spectrum.shape)
+#         spectrum = self.fc(spectrum)  # (*, bands, band-width)
+#         spectrum = self.activate(spectrum)
+#         first_dim, bands, band_width = spectrum.shape
+#         spectrum = torch.reshape(spectrum, shape=(first_dim, bands*band_width))
+#         print("Decoder spectrum: ", spectrum.shape)
+#         return spectrum
 
 class SubBandDecoderBlock(nn.Module):
     def __init__(self, in_features: int, out_features: int, start_idx: int, end_idx: int):
@@ -103,13 +136,15 @@ class SubBandDecoderBlock(nn.Module):
         :return:
         """
         encode_amplitude_spectrum = encode_amplitude_spectrum[:, :, self.start_idx: self.end_idx]
-        # print(encode_amplitude_spectrum.shape, decode_amplitude_spectrum.shape)
+        # print("SubBand decoder input: ", encode_amplitude_spectrum.shape, decode_amplitude_spectrum.shape)
         spectrum = torch.cat([encode_amplitude_spectrum, decode_amplitude_spectrum], dim=1)  # channels cat
         spectrum = torch.transpose(spectrum, dim0=1, dim1=2).contiguous()   # (*, bands, channels)
-
+        # bands, channels = spectrum.shape[-2:]
+        # spectrum = spectrum.reshape((*spectrum.shape[:-2], -1))
+        # print("SubBand decoder input: ", spectrum.shape)
         spectrum = self.fc(spectrum)  # (*, bands, band-width)
         spectrum = self.activate(spectrum)
         first_dim, bands, band_width = spectrum.shape
         spectrum = torch.reshape(spectrum, shape=(first_dim, bands*band_width))
-
+        # print("Decoder spectrum: ", spectrum.shape)
         return spectrum

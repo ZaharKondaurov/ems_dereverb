@@ -46,10 +46,10 @@ def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts
         low_sub_band_0 = int((nfft // 2 + 1) * 0.1)
         low_sub_band_1 = int((nfft // 2 + 1) * 0.25)
         low_sub_band_2 = int((nfft // 2 + 1) * 0.5)
-        loss += _compute_mr(Y, Y_abs, S, S_abs)
-                 # _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
-                 # _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
-                 # _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :])
+        loss += (_compute_mr(Y, Y_abs, S, S_abs) +
+                 _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
+                 _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
+                 _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :]))
     #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
     # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
     return loss / len(nffts)
