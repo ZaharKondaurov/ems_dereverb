@@ -21,8 +21,8 @@ class FullBandEncoder(nn.Module):
             self.full_band_encoder.append(FullBandEncoderBlock(**conv_parameter))
             last_channels = conv_parameter["out_channels"]
 
-        global_feat_conv = configs.full_band_encoder["encoder1"]["conv"]
-        self.global_features = global_feat_conv(in_channels=last_channels, out_channels=last_channels, kernel_size=1, stride=1)
+        # global_feat_conv = nn.Conv1d # configs.full_band_encoder["encoder1"]["conv"]
+        self.global_features = nn.Conv1d(in_channels=last_channels, out_channels=last_channels, kernel_size=1, stride=1)
 
     def forward(self, complex_spectrum: Tensor):
         """
@@ -104,7 +104,7 @@ class SubBandDecoder(nn.Module):
 
 
 class FullSubPathExtension(nn.Module):
-    def __init__(self, configs: TrainConfig):
+    def __init__(self, configs: TrainConfig, need_mask: bool = True):
         super().__init__()
         self.full_band_encoder = FullBandEncoder(configs)
         self.sub_band_encoder = SubBandEncoder(configs)
@@ -118,7 +118,7 @@ class FullSubPathExtension(nn.Module):
         self.feature_merge_layer = nn.Sequential(
             nn.Linear(in_features=merge_channels, out_features=merge_channels//compress_rate),
             nn.ELU(),
-            merge_split["conv"](in_channels=merge_bands, out_channels=merge_bands//compress_rate, kernel_size=1, stride=1)
+            nn.Conv1d(in_channels=merge_bands, out_channels=merge_bands//compress_rate, kernel_size=1, stride=1)
         )
 
         # with profiler.record_function("Create GRU"):
@@ -127,7 +127,7 @@ class FullSubPathExtension(nn.Module):
             self.dual_path_extension_rnn_list.append(DualPathExtensionRNN(**configs.dual_path_extension["parameters"]))
 
         self.feature_split_layer = nn.Sequential(
-            merge_split["conv"](in_channels=merge_bands//compress_rate, out_channels=merge_bands, kernel_size=1, stride=1),
+            nn.Conv1d(in_channels=merge_bands//compress_rate, out_channels=merge_bands, kernel_size=1, stride=1),
             nn.Linear(in_features=merge_channels//compress_rate, out_features=merge_channels),
             nn.ELU()
         )
@@ -136,6 +136,7 @@ class FullSubPathExtension(nn.Module):
         self.sub_band_decoder = SubBandDecoder(configs)
 
         self.mask_padding = nn.ConstantPad2d(padding=(1, 0, 0, 0), value=0.0)
+        self.need_mask = need_mask
 
     def forward(self, in_complex_spectrum: Tensor, in_amplitude_spectrum: Tensor, hidden_state: list):
         """
@@ -193,7 +194,8 @@ class FullSubPathExtension(nn.Module):
 
         # Zero padding in the DC signal part removes the DC component
         # with profiler.record_function("Mask padding"):
-        full_band_mask = self.mask_padding(full_band_mask)
+        if self.need_mask:
+            full_band_mask = self.mask_padding(full_band_mask) # uncomment for all modeles except TrainConfig48kHzEnc2x_ver1
         sub_band_mask = self.mask_padding(sub_band_mask)
         # print(in_complex_spectrum.shape, full_band_mask.shape)
         full_band_out = in_complex_spectrum * full_band_mask

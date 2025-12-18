@@ -25,11 +25,12 @@ CEILING_KEYWORDS = ["ceiling_plasterboard", "ceiling_fissured_tile", "ceiling_me
 class SignalDataset(ABC, Dataset):
 
     def __init__(self, data_dir_path: str, sr: int = 16_000,
-                 snr: Union[int, Tuple[int, int], List[int]] = 0,
+                 snr: Union[int, Tuple[int, int], List[int], Dict[int, List[int]]] = 0,
                  chunk_size: int = 16_000 * 2,
                  stride: int = 16_000,
-                 noise_dir: str =None,
-                 rir_dir: str = None,
+                 noise_dir: str = None,
+                 rir_dir: Union[str, Dict[int, str]] = None,
+                 rir_target: bool = False,
                  room_square: Tuple[float, float] = (7., 14.),
                  room_height: Tuple[float, float] = (3., 4.),
                  return_noise: bool = False,
@@ -49,6 +50,11 @@ class SignalDataset(ABC, Dataset):
 
         self.sr = sr
         self.snr = snr
+        self.snr_dict = None
+        if isinstance(snr, dict):
+            self.snr_dict = snr
+            self.snr = list(self.snr_dict.values())[0]
+
         self.chunk_size = chunk_size
         self.stride = stride
         self.room_square = room_square
@@ -61,10 +67,25 @@ class SignalDataset(ABC, Dataset):
             shuffle(self.noise_files)
 
         self.rir_dir = rir_dir
+        # self.rir_dir_target = rir_dir_target
 
+        self.rir_dict = None
+        # self.rir_dict_target = None
+        if isinstance(rir_dir, dict):
+            self.rir_dict = rir_dir
+            self.rir_dir = list(self.rir_dict.values())[0]
+            # if rir_dir_target is not None:
+            #     self.rir_dict_target = rir_dir_target
+            #     self.rir_dir_target = list(self.rir_dict.values())[0]
+        self.rir_target = rir_target
         if self.rir_dir is not None:
             self.rir_files = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"] # os.listdir(rir_dir)
             shuffle(self.rir_files)
+            # if rir_target:
+            #     self.rir_files_target = [os.path.join(r + "_target", f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"]
+
+            # if self.rir_dir_target is not None:
+            #     self.rir_files_target = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir_target) for f in fs if f[-3:] == "wav"]
 
         self.return_noise = return_noise
         self.return_rir = return_rir
@@ -72,6 +93,7 @@ class SignalDataset(ABC, Dataset):
 
         self.noise_proba = noise_proba
         self.rir_proba = rir_proba
+        self.epoch = 0
 
     # @staticmethod
     # def simulate_noise(signal: torch.Tensor, noise: torch.Tensor, snr_db: int) -> torch.Tensor:
@@ -99,6 +121,7 @@ class SignalDataset(ABC, Dataset):
     #     noise = noise * noise_mult # (target_rms_noise / rms_noise)
     #     # print(noise_mult)
     #     return noise
+
     @staticmethod
     def to_db(ratio):
         assert ratio >= 0
@@ -129,6 +152,27 @@ class SignalDataset(ABC, Dataset):
         ns_mult = ns_mult.item()
         # print(ns_mult, ns_audio.shape)
         return ns_mult * ns_audio
+    
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
+
+        if self.snr_dict is not None:
+            for step, snr in self.snr_dict.items():
+                if epoch >= step:
+                    self.snr = snr
+                else:
+                    break
+        
+        if self.rir_dict is not None:
+            self.rir_files = []
+            for step, rir_path in self.rir_dict.items():
+                if epoch >= step:
+                    self.rir_files.extend([os.path.join(r, f) for r, d, fs in os.walk(rir_path) for f in fs if f[-3:] == "wav"])
+                    # if self.rir_target:
+                    #     self.rir_files_target.extend([os.path.join(r + "_target", f) for r, d, fs in os.walk(rir_path) for f in fs if f[-3:] == "wav"])
+                else:
+                    break
+            shuffle(self.rir_files)
 
     def simulate_rir_shoebox(self, signal: torch.Tensor) -> torch.Tensor:
         square = uniform(*self.room_square)
@@ -215,6 +259,25 @@ class SignalDataset(ABC, Dataset):
             rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='full', axes=-1))
             rir_signal = rir_signal[..., :target_signal.shape[-1]]
 
+            if self.rir_target:
+                # rir_basename = os.path.basename(filename_rir)
+                rir_directory, rir_basename = os.path.split(filename_rir)
+                dir_, dir_name = os.path.split(rir_directory)
+                if "soft" not in dir_name:
+                    targer_rir_path = os.path.join(dir_, dir_name + "_target", rir_basename)
+
+                    target_rir, target_rir_sr = torchaudio.load(targer_rir_path)
+
+                    if target_rir.shape[0] > 1:
+                        target_rir = torch.from_numpy(librosa.to_mono(target_rir.numpy()))[None, :]
+                    if target_rir_sr != self.sr:
+                        resampler = Resample(target_rir_sr, self.sr)
+                        target_rir = resampler(target_rir)
+
+                    target_rir, _ = SignalDataset.normalize_audio(target_rir)
+                    
+                    target_signal = torch.from_numpy(fftconvolve(target_signal, target_rir, mode='full', axes=-1))[..., :target_signal.shape[-1]]
+
             rir_component = rir_signal - target_signal
         else:
             rir_signal = target_signal
@@ -270,11 +333,12 @@ class SignalDataset(ABC, Dataset):
 class TRUNetDataset(SignalDataset):
 
     def __init__(self, data_dir_path: str, sr: int = 16_000,
-                 snr: Union[int, Tuple[int, int], List[int]] = 0,
+                 snr: Union[int, Tuple[int, int], List[int], Dict[int, List[int]]] = 0,
                  chunk_size: int = 16_000 * 2,
                  stride: int = 16_000,
                  noise_dir: str = None,
-                 rir_dir: str = None,
+                 rir_dir: Union[str, Dict[int, str]] = None,
+                 rir_target: bool = False,
                  room_square: Tuple[float, float] = (7., 14.),
                  room_height: Tuple[float, float] = (3., 4.),
                  return_noise: bool = False,
@@ -286,7 +350,8 @@ class TRUNetDataset(SignalDataset):
                  mode="train",):
 
         super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
-                                            stride=stride, noise_dir=noise_dir, rir_dir=rir_dir, room_square=room_square,
+                                            stride=stride, noise_dir=noise_dir, rir_dir=rir_dir, rir_target=rir_target, 
+                                            room_square=room_square,
                                             room_height=room_height, return_noise=return_noise,
                                             return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
                                             noise_proba=noise_proba, rir_proba=rir_proba, mode=mode)
