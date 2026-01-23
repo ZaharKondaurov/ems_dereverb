@@ -8,9 +8,15 @@ from src.fspen_configs import TrainConfig
 
 
 def _compute_mr(Y: torch.Tensor, Y_abs: torch.Tensor, S: torch.Tensor, S_abs: torch.Tensor) -> torch.Tensor:
-    return F.mse_loss(Y_abs, S_abs) + torch.mean(torch.abs(Y_abs * (Y / (torch.abs(Y) + 1e-9)) - S_abs * (S / (torch.abs(S) + 1e-9))) ** 2)
+    x1 = F.mse_loss(Y_abs, S_abs)
+    x2 = F.mse_loss(torch.abs(Y_abs * (Y / (torch.abs(Y) + 1e-9))), torch.abs(S_abs * (S / (torch.abs(S) + 1e-9))))
+    # print(f"Abs: {x1:.2f}, Pha: {x2:.2f}")
+    return x1 + x2
 
-def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25) -> torch.Tensor:
+def anti_wrapping_function(x):
+    return torch.abs(x - torch.round(x / (2 * torch.pi)) * 2 * torch.pi)
+
+def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
     # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
@@ -54,6 +60,46 @@ def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 0.3, nffts
     # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
     return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
 
+def phase_losses(phase_r, phase_g):
+    """
+    Calculate phase losses including in-phase loss, gradient delay loss, 
+    and integrated absolute frequency loss between reference and generated phases.
+    
+    Args:
+        phase_r (torch.Tensor): Reference phase tensor of shape (batch, freq, time).
+        phase_g (torch.Tensor): Generated phase tensor of shape (batch, freq, time).
+        h (object): Configuration object containing parameters like n_fft.
+    
+    Returns:
+        tuple: Tuple containing in-phase loss, gradient delay loss, and integrated absolute frequency loss.
+    """
+    dim_freq = phase_r.size(-2)  # Calculate frequency dimension
+    dim_time = phase_r.size(-1)  # Calculate time dimension
+    
+    # Construct gradient delay matrix
+    gd_matrix = (torch.triu(torch.ones(dim_freq, dim_freq), diagonal=1) - 
+                 torch.triu(torch.ones(dim_freq, dim_freq), diagonal=2) - 
+                 torch.eye(dim_freq)).to(phase_g.device)
+    
+    # Apply gradient delay matrix to reference and generated phases
+    gd_r = torch.matmul(phase_r.permute(0, 2, 1), gd_matrix)
+    gd_g = torch.matmul(phase_g.permute(0, 2, 1), gd_matrix)
+    
+    # Construct integrated absolute frequency matrix
+    iaf_matrix = (torch.triu(torch.ones(dim_time, dim_time), diagonal=1) - 
+                  torch.triu(torch.ones(dim_time, dim_time), diagonal=2) - 
+                  torch.eye(dim_time)).to(phase_g.device)
+    
+    # Apply integrated absolute frequency matrix to reference and generated phases
+    iaf_r = torch.matmul(phase_r, iaf_matrix)
+    iaf_g = torch.matmul(phase_g, iaf_matrix)
+    
+    # Calculate losses
+    ip_loss = torch.mean(anti_wrapping_function(phase_r - phase_g))
+    gd_loss = torch.mean(anti_wrapping_function(gd_r - gd_g))
+    iaf_loss = torch.mean(anti_wrapping_function(iaf_r - iaf_g))
+    
+    return ip_loss, gd_loss, iaf_loss
 
 def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
     if lens is None:

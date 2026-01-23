@@ -43,7 +43,9 @@ class SignalDataset(ABC, Dataset):
 
         self.path = data_dir_path
         # self.signal_files = [x for x in os.listdir(self.path) if x[-3:] == "wav"]
-        self.signal_files = [os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if f[-3:] == "wav"] #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
+        self.audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
+        # print([os.path.splitext(f)[1] for r, d, fs in os.walk(self.path) for f in fs])
+        self.signal_files = [os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
         if partition is not None:
             self.signal_files = self.signal_files[:partition]
         shuffle(self.signal_files)
@@ -63,7 +65,7 @@ class SignalDataset(ABC, Dataset):
         self.noise_dir = noise_dir
 
         if self.noise_dir is not None:
-            self.noise_files = [os.path.join(r, f) for r, d, fs in os.walk(self.noise_dir) for f in fs if f[-3:] == "wav"] # os.listdir(noise_dir)
+            self.noise_files = [os.path.join(r, f) for r, d, fs in os.walk(self.noise_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] # os.listdir(noise_dir)
             shuffle(self.noise_files)
 
         self.rir_dir = rir_dir
@@ -79,7 +81,7 @@ class SignalDataset(ABC, Dataset):
             #     self.rir_dir_target = list(self.rir_dict.values())[0]
         self.rir_target = rir_target
         if self.rir_dir is not None:
-            self.rir_files = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"] # os.listdir(rir_dir)
+            self.rir_files = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] # os.listdir(rir_dir)
             shuffle(self.rir_files)
             # if rir_target:
             #     self.rir_files_target = [os.path.join(r + "_target", f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"]
@@ -167,7 +169,7 @@ class SignalDataset(ABC, Dataset):
             self.rir_files = []
             for step, rir_path in self.rir_dict.items():
                 if epoch >= step:
-                    self.rir_files.extend([os.path.join(r, f) for r, d, fs in os.walk(rir_path) for f in fs if f[-3:] == "wav"])
+                    self.rir_files.extend([os.path.join(r, f) for r, d, fs in os.walk(rir_path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions])
                     # if self.rir_target:
                     #     self.rir_files_target.extend([os.path.join(r + "_target", f) for r, d, fs in os.walk(rir_path) for f in fs if f[-3:] == "wav"])
                 else:
@@ -237,10 +239,15 @@ class SignalDataset(ABC, Dataset):
         filename = self.signal_files[idx]
 
         target_signal, signal_sr = torchaudio.load(filename)
+        if self.max_seq_len is not None:
+            start = randint(0, max(0, target_signal.numel() - self.max_seq_len))
+
+            target_signal = target_signal[..., start:start + self.max_seq_len]
+
         # print(target_signal.shape)
         noise = None
         rir_component = None
-        target_signal, _ = SignalDataset.normalize_audio(target_signal)
+        # target_signal, _ = SignalDataset.normalize_audio(target_signal)
         if signal_sr != self.sr:
             resampler = Resample(signal_sr, self.sr)
             target_signal = resampler(target_signal)
@@ -254,7 +261,7 @@ class SignalDataset(ABC, Dataset):
                 resampler = Resample(rir_sr, self.sr)
                 rir = resampler(rir)
 
-            rir, _ = SignalDataset.normalize_audio(rir)
+            # rir, _ = SignalDataset.normalize_audio(rir)
 
             rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='full', axes=-1))
             rir_signal = rir_signal[..., :target_signal.shape[-1]]
@@ -294,7 +301,7 @@ class SignalDataset(ABC, Dataset):
                 noise = resampler(noise)
 
             # noise -= noise.mean(dim=1)
-            noise, _ = SignalDataset.normalize_audio(noise)
+            # noise, _ = SignalDataset.normalize_audio(noise)
             noise = self.simulate_noise(rir_signal, noise, snr_db)
             # print(noise.shape, rir_signal.shape)
             output = rir_signal + noise
@@ -309,6 +316,8 @@ class SignalDataset(ABC, Dataset):
             rir_component, _ = SignalDataset.normalize_audio(rir_component)
 
         if self.max_seq_len is not None:
+            # start = np.randint(0, max(0,output.shape[-1] - self.max_seq_len))
+
             output_padded = torch.zeros(1, self.max_seq_len)
             output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
 
@@ -324,6 +333,8 @@ class SignalDataset(ABC, Dataset):
             if (self.noise_dir is not None) and self.return_noise:
                 noise_padded = torch.zeros(1, self.max_seq_len)
                 noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
+
+            # start = np.randint(0, output_padded.numel() - self.max_seq_len)
 
             return output_padded, target_padded, noise_padded, rir_padded
 
@@ -426,5 +437,8 @@ class VoiceBankDataset(ABC, Dataset):
             noise_signal = resampler(noise_signal)
 
         target_signal, noise_signal = SignalDataset.normalize_audio(target_signal, noise_signal)
+
+        if self.max_seq_len is not None:
+            return noise_signal[..., :self.max_seq_len], target_signal[..., :self.max_seq_len]
 
         return noise_signal, target_signal

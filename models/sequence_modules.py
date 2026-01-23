@@ -30,7 +30,7 @@ class GroupRNN(nn.Module):
         self.rnn_list = nn.ModuleList()
         for _ in range(groups):
             self.rnn_list.append(
-                getattr(nn, rnn_type)(input_size=input_size // groups, hidden_size=hidden_size//groups,
+                getattr(nn, rnn_type)(input_size=input_size, hidden_size=hidden_size,
                                       num_layers=num_layers,
                                       bidirectional=bidirectional, batch_first=batch_first)
             )
@@ -48,9 +48,9 @@ class GroupRNN(nn.Module):
         batch, steps, _ = inputs.shape
 
         # with profiler.record_function("GRU module"):
-        inputs = torch.reshape(inputs, shape=(batch, steps, self.groups, -1))  # (batch, steps, groups, width)
+        # inputs = torch.reshape(inputs, shape=(batch, steps, self.groups, -1))  # (batch, steps, groups, width)
         for idx, rnn in enumerate(self.rnn_list):
-            out, state = rnn(inputs[:, :, idx, :], hidden_state[idx])
+            out, state = rnn(inputs, hidden_state[idx])
             outputs.append(out)  # (batch, steps, hidden_size)
             out_states.append(state)  # (num_layers*bidirectional, batch*[], hidden_size)
 
@@ -75,7 +75,7 @@ class DualPathExtensionRNN(nn.Module):
 
         self.inter_chunk_rnn = GroupRNN(input_size=input_size, hidden_size=inter_hidden_size, groups=groups,
                                         rnn_type=rnn_type)
-        self.inter_chunk_fc = nn.Linear(in_features=inter_hidden_size, out_features=input_size)
+        self.inter_chunk_fc = nn.Linear(in_features=inter_hidden_size * groups, out_features=input_size)
 
     def forward(self, inputs: Tensor, hidden_state: List[Tensor]):
         """
