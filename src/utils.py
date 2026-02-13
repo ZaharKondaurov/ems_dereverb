@@ -5,6 +5,18 @@ from termcolor import colored
 from collections import defaultdict
 
 
+PCS = {        # Perceptual Contrast Stretching
+    (0, 3): 1,
+    (3, 6): 1.070175439,
+    (6, 9): 1.182456140,
+    (9, 12): 1.287719298,
+    (12, 138): 1.4,
+    (138, 166): 1.322807018,
+    (166, 200): 1.238596491,
+    (200, 241): 1.161403509,
+    (241, 257): 1.077192982
+}
+
 def beautiful_int(i):
     i = str(i)
     return ".".join(reversed([i[max(j, 0):j+3] for j in range(len(i) - 3, -3, -3)]))
@@ -54,6 +66,23 @@ def mag_phase_stft(y, n_fft, hop_size, win_size, compress_factor=1.0, center=Tru
     com = torch.stack((mag * torch.cos(pha), mag * torch.sin(pha)), dim=-1)
     return com
 
+def use_pcs(spec, n_fft=512):
+    k = n_fft // 512
+    pcs = torch.ones(n_fft // 2 + 1, device=spec.device)
+    for (start, end), gamma in PCS.items():
+        pcs[start * k: end * k] = gamma
+
+    spec_mag = torch.log1p(spec.abs())
+    spec_mag_pcs = pcs * spec_mag.transpose(-2, -1)
+
+    spec_pcs = torch.polar(spec_mag_pcs.transpose(-2, -1), spec.angle())
+
+    return spec_pcs
+
+def inv_pcs(mag, phase):
+    spec_mag = torch.expm1(mag)
+    return torch.polar(spec_mag, phase)
+
 # Считаем общее число параметров в нашей модели
 def model_num_params(model, verbose_all=True, verbose_only_learnable=False):
     sum_params = 0
@@ -92,8 +121,8 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     input_spec = input_spec.to(device)
 
     abs_spectrum = input_spec.abs()
-    input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))
-    # input_spec_ = torch.stack((input_spec.abs(), input_spec.angle()), dim=-1).permute((0, 2, 3, 1))
+    # input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))
+    input_spec_ = torch.stack((input_spec.abs(), input_spec.angle()), dim=-1).permute((0, 2, 3, 1))
 
     batch, frames, channels, frequency = input_spec_.shape
     abs_spectrum = torch.permute(abs_spectrum, dims=(0, 2, 1))
@@ -104,13 +133,35 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     # print(output.shape, input_spec.angle().shape)
     # output = torch.concat([output, input_spec.angle()])
 
-    output = torch.permute(output, dims=(0, 3, 1, 2))
+    # output = torch.permute(output, dims=(0, 3, 1, 2))
     # output = torch.concat([output, input_spec.angle()[..., None]], dim=-1)
     # output = torch.polar(output.contiguous()[..., 0], input_spec.angle())
-    output = torch.view_as_complex(output.contiguous())
-    # output = torch.polar(output[..., 0, :], output[..., 1, :])
+    # output = torch.view_as_complex(output.contiguous())
+    output = torch.permute(output, dims=(0, 3, 1, 2))
+    output = torch.polar(output[..., 0], output[..., 1])
 
     return output, hid_out
+
+def model_eval_3_heads(model, input_spec, configs, device="cpu", hid_size=64):
+    input_spec = input_spec.to(device)
+
+    abs_spectrum = input_spec.abs()
+    input_spec_ = torch.stack((input_spec.abs(), input_spec.angle()), dim=-1).permute((0, 2, 3, 1))
+
+    batch, frames, channels, frequency = input_spec_.shape
+    abs_spectrum = torch.permute(abs_spectrum, dims=(0, 2, 1))
+    abs_spectrum = torch.reshape(abs_spectrum, shape=(batch, frames, 1, frequency))
+    h0 = [[torch.zeros(1, batch * hid_size, 16, device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
+
+    output, hid_out = model(input_spec_, abs_spectrum, h0)
+    
+    output = torch.permute(output, dims=(0, 3, 1, 2))
+
+    output_signal = torch.polar(output[..., 0], output[..., 1])
+    output_noise = torch.polar(output[..., 2], output[..., 3])
+    output_rir = torch.polar(output[...,4], output[..., 5])
+
+    return output_signal, output_noise, output_rir, hid_out
 
 def model_eval_fspen2x_ver3(model, input_spec, device="cpu", hid_size=64):
     input_spec = input_spec.to(device)
