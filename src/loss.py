@@ -99,6 +99,72 @@ def loss_MR_PCS(input: torch.Tensor, target: torch.Tensor, nffts: list = None, h
         loss += _compute_mr(Y, Y_abs, S, S_abs)
     return loss / len(nffts)
 
+def loss_pcm(predicted: torch.Tensor, target: torch.Tensor, input: torch.Tensor, nffts: list = None, hop_fr: float = 0.25):
+    if nffts is None:
+        nffts = [1024, 512, 256]
+    loss = torch.zeros((), device=input.device, dtype=input.dtype)
+    for nfft in nffts:
+        X = torch.view_as_real(torch.stft(
+            predicted,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=input.device),
+            normalized=True,
+            return_complex=True,
+        ))
+        Y = torch.view_as_real(torch.stft(
+            input,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=input.device),
+            normalized=True,
+            return_complex=True,
+        ))
+        X_target = torch.view_as_real(torch.stft(
+            target,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=target.device),
+            normalized=True,
+            return_complex=True,
+        ))
+
+        loss_1 = F.l1_loss(X.sum(-1).abs(), X_target.sum(-1).abs())
+        loss_2 = F.l1_loss((Y - X).sum(-1).abs(), (Y - X_target).sum(-1).abs())
+
+        loss += loss_1 + loss_2
+
+    return loss / len(nffts)
+
+def loss_ri_mag(predicted: torch.Tensor, target: torch.Tensor, nffts: list = None, hop_fr: float = 0.25):
+    if nffts is None:
+        nffts = [1024, 512, 256]
+    loss = torch.zeros((), device=predicted.device, dtype=predicted.dtype)
+    for nfft in nffts:
+        X = torch.view_as_real(torch.stft(
+            predicted,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=predicted.device),
+            normalized=True,
+            return_complex=True,
+        ))
+        Y = torch.view_as_real(torch.stft(
+            target,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=target.device),
+            normalized=True,
+            return_complex=True,
+        ))
+
+        loss_1 = F.l1_loss(X.sum(-1).abs(), Y.sum(-1).abs())
+        loss_2 = F.l1_loss(torch.view_as_complex(X).abs(), torch.view_as_complex(Y).abs())
+
+        loss += loss_1 + loss_2
+
+    return loss / len(nffts)
+
 def phase_losses(phase_r, phase_g):
     """
     Calculate phase losses including in-phase loss, gradient delay loss, 
