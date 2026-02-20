@@ -68,7 +68,7 @@ class TrainConfig(BaseModel):
                 raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
             
 class TrainConfig_48khz(BaseModel):
-    sample_rate: int = 16000
+    sample_rate: int = 48000
     n_fft: int = 1024
     hop_length: int = 512
     train_frames: int = 62
@@ -113,7 +113,62 @@ class TrainConfig_48khz(BaseModel):
     dual_path_extension: dict = {
         "num_modules": 3,
         "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
-                       "groups": 8, "rnn_type": "GRU"}
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @field_validator("sub_band_decoder")
+    def sub_band_decoder_validate(cls, decoders):
+        for decoder in decoders:
+            if decoder["out_feature"] < 2:
+                raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
+            
+class TrainConfig_48khz_RNN_Large(BaseModel):
+    sample_rate: int = 48000
+    n_fft: int = 1024
+    hop_length: int = 512
+    train_frames: int = 62
+    train_points: int = (train_frames - 1) * hop_length
+
+    full_band_encoder: Dict[str, dict] = {
+        "encoder1": {"in_channels": 2, "out_channels": 4, "kernel_size": 6, "stride": 2, "padding": 2},
+        "encoder2": {"in_channels": 4, "out_channels": 16, "kernel_size": 8, "stride": 2, "padding": 3},
+        "encoder3": {"in_channels": 16, "out_channels": 32, "kernel_size": 6, "stride": 2, "padding": 2}
+    }
+    full_band_decoder: Dict[str, dict] = {
+        "decoder1": {"in_channels": 64, "out_channels": 16, "kernel_size": 6, "stride": 2, "padding": 2},
+        "decoder2": {"in_channels": 32, "out_channels": 4, "kernel_size": 8, "stride": 2, "padding": 3},
+        "decoder3": {"in_channels": 8, "out_channels": 2, "kernel_size": 6, "stride": 2, "padding": 2}
+    }
+
+    sub_band_encoder: Dict[str, dict] = {
+        "encoder1": {"group_width": 18, "conv": {"start_frequency": 0, "end_frequency": 18, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}}, # 8
+        "encoder2": {"group_width": 18, "conv": {"start_frequency": 18, "end_frequency": 36, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}}, # 8
+        "encoder3": {"group_width": 48, "conv": {"start_frequency": 36, "end_frequency": 84, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 13, "stride": 6, "padding": 0}}, # 6
+        "encoder4": {"group_width": 48, "conv": {"start_frequency": 84, "end_frequency": 132, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 13, "stride": 6, "padding": 0}}, # 6
+        "encoder5": {"group_width": 66, "conv": {"start_frequency": 132, "end_frequency": 198, "in_channels": 1,
+                                                  "out_channels": 32, "kernel_size": 16, "stride": 9, "padding": 0}}, # 6
+        "encoder6": {"group_width": 66, "conv": {"start_frequency": 198, "end_frequency": 264, "in_channels": 1,
+                                                  "out_channels": 32, "kernel_size": 16, "stride": 9, "padding": 0}}, # 6
+        "encoder7": {"group_width": 120, "conv": {"start_frequency": 264, "end_frequency": 384, "in_channels": 1,
+                                                  "out_channels": 32, "kernel_size": 16, "stride": 9, "padding": 0}}, # 6
+        "encoder8": {"group_width": 129, "conv": {"start_frequency": 384, "end_frequency": 513, "in_channels": 1,
+                                                  "out_channels": 32, "kernel_size": 20, "stride": 7, "padding": 0}}, # 6
+    }
+    merge_split: dict = {"channels": 128, "bands": 32, "compress_rate": 2}
+    bands_num_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[0]
+    band_width_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[1]
+
+    sub_band_decoder: Dict[str, dict] = {f"decoder{idx}": {"in_features": 64, "out_features": width}
+                                         for idx, width in enumerate(band_width_in_groups)}
+
+    dual_path_extension: dict = {
+        "num_modules": 4,
+        "parameters": {"input_size": 16, "intra_hidden_size": 32, "inter_hidden_size": 32,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 2,}
     }
 
     @field_validator("sub_band_decoder")
