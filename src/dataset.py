@@ -650,9 +650,12 @@ class VoiceBankDataset(ABC, Dataset):
                  partition: int = None,
                  mode="train"):
 
-        self.noise_path = noise_dir_path
+        self.noise_dir_path = noise_dir_path
         self.clean_dir_path = clean_dir_path
-        self.signal_files = [x for x in os.listdir(self.noise_path) if x[-3:] == "wav"]
+        self.audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
+        # self.signal_files = [x for x in os.listdir(self.noise_path) if os.path.splitext(x)[-1] in self.audio_extensions]
+        self.signal_files = [os.path.relpath(os.path.join(r, f), self.noise_dir_path) for r, d, fs in os.walk(self.noise_dir_path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions]
+        # print(self.signal_files)
         if partition is not None:
             self.signal_files = self.signal_files[:partition]
         shuffle(self.signal_files)
@@ -661,10 +664,6 @@ class VoiceBankDataset(ABC, Dataset):
         self.chunk_size = chunk_size
         self.stride = stride
         self.max_seq_len = max_seq_len
-
-    # @abstractmethod
-    # def _preprocess(self, signal: torch.Tensor) -> torch.Tensor:
-    #     raise signal
 
     def __len__(self):
         return len(self.signal_files)
@@ -690,7 +689,7 @@ class VoiceBankDataset(ABC, Dataset):
             assert f"There is not {filename} in clean dir"
 
         try:
-            noise_signal, noise_sr = torchaudio.load(os.path.join(self.noise_path, filename))
+            noise_signal, noise_sr = torchaudio.load(os.path.join(self.noise_dir_path, filename))
         except FileNotFoundError:
             assert f"There is not {filename} in noise dir"
 
@@ -705,6 +704,14 @@ class VoiceBankDataset(ABC, Dataset):
         target_signal, noise_signal = SignalDataset.normalize_audio(target_signal, noise_signal)
 
         if self.max_seq_len is not None:
-            return noise_signal[..., :self.max_seq_len], target_signal[..., :self.max_seq_len]
+            start = randint(0, max(0, target_signal.numel() - self.max_seq_len))
+
+        if self.max_seq_len is not None:
+            noise_signal_padded = torch.zeros(1, self.max_seq_len)
+            noise_signal_padded[..., :noise_signal.shape[-1]] = noise_signal[..., start:start + self.max_seq_len]
+
+            target_signal_padded = torch.zeros(1, self.max_seq_len)
+            target_signal_padded[..., :target_signal.shape[-1]] = target_signal[..., start:start + self.max_seq_len]
+            return noise_signal_padded, target_signal_padded
 
         return noise_signal, target_signal

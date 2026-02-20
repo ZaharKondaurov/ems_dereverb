@@ -64,17 +64,18 @@ class DualPathExtensionRNN(nn.Module):
                  intra_hidden_size: int,
                  inter_hidden_size: int,
                  groups: int,
-                 rnn_type: str):
+                 rnn_type: str,
+                 num_layers: int = 1,):
         super().__init__()
         assert rnn_type in ["RNN", "GRU", "LSTM"], f"rnn_type should be RNN/GRU/LSTM, but got {rnn_type}!"
 
         self.intra_chunk_rnn = getattr(nn, rnn_type)(input_size=input_size, hidden_size=intra_hidden_size,
-                                                     num_layers=1, bidirectional=True, batch_first=True) # for reduced bidirectional=False
+                                                     num_layers=num_layers, bidirectional=True, batch_first=True) # for reduced bidirectional=False
         self.intra_chunk_fc = nn.Linear(in_features=intra_hidden_size*2, out_features=input_size) # for reduced in_features=intra_hidden_size
         self.intra_chunk_norm = nn.LayerNorm(normalized_shape=input_size, elementwise_affine=True)
 
         self.inter_chunk_rnn = GroupRNN(input_size=input_size, hidden_size=inter_hidden_size, groups=groups,
-                                        rnn_type=rnn_type)
+                                        rnn_type=rnn_type, num_layers=num_layers)
         self.inter_chunk_fc = nn.Linear(in_features=inter_hidden_size * groups, out_features=input_size)
 
     def forward(self, inputs: Tensor, hidden_state: List[Tensor]):

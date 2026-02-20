@@ -286,8 +286,8 @@ class FullSubPathExtension(nn.Module):
         sub_band_out = in_amplitude_spectrum * sub_band_mask
         # outputs is (batch, frames, 2, frequency), complex style.
 
-        full_band_out[:, :, 0:1, :] = (full_band_out[:, :, 0:1, :] + sub_band_out) / 2
-        return full_band_out, out_hidden_state
+        # full_band_out[:, :, 0:1, :] = (full_band_out[:, :, 0:1, :] + sub_band_out) / 2
+        return full_band_out, sub_band_out, out_hidden_state
     
 class FullSubPathExtension_3_heads(nn.Module):
     def __init__(self, configs: TrainConfig, need_mask: bool = True):

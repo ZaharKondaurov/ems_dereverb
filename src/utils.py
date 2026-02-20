@@ -142,6 +142,36 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
 
     return output, hid_out
 
+def model_eval_old(model, input_spec, configs, device="cpu", hid_size=64):
+    input_spec = input_spec.to(device)
+
+    abs_spectrum = input_spec.abs()
+    input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))
+    # input_spec_ = torch.stack((input_spec.abs(), input_spec.angle()), dim=-1).permute((0, 2, 3, 1))
+
+    batch, frames, channels, frequency = input_spec_.shape
+    abs_spectrum = torch.permute(abs_spectrum, dims=(0, 2, 1))
+    abs_spectrum = torch.reshape(abs_spectrum, shape=(batch, frames, 1, frequency))
+    h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * hid_size, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
+
+    output, abs_addon, hid_out = model(input_spec_, abs_spectrum, h0)
+    # print(output.shape, input_spec.angle().shape)
+    # output = torch.concat([output, input_spec.angle()])
+
+    output = torch.permute(output, dims=(0, 3, 1, 2))
+    # output = torch.concat([output, input_spec.angle()[..., None]], dim=-1)
+    # output = torch.polar(output.contiguous()[..., 0], input_spec.angle())
+    output = torch.view_as_complex(output.contiguous())
+    out_abs, out_pha = output.abs(), output.angle()
+    abs_addon = torch.permute(abs_addon, dims=(0, 3, 1, 2))
+    # print(out_abs.shape, abs_addon.shape)
+    out_abs += abs_addon[..., -1]
+    # output = torch.permute(output, dims=(0, 3, 1, 2))
+    result = torch.polar(out_abs, out_pha)
+
+
+    return result, hid_out
+
 def model_eval_3_heads(model, input_spec, configs, device="cpu", hid_size=64):
     input_spec = input_spec.to(device)
 
