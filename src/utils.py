@@ -118,7 +118,7 @@ def model_num_params(model, verbose_all=True, verbose_only_learnable=False):
     return sum_params, sum_learnable_params
 
 def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
-    input_spec = input_spec.to(device)
+    # input_spec = input_spec.to(device)
 
     abs_spectrum = input_spec.abs()
     # input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))
@@ -143,7 +143,7 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     return output, hid_out
 
 def model_eval_old(model, input_spec, configs, device="cpu", hid_size=64):
-    input_spec = input_spec.to(device)
+    # input_spec = input_spec.to(device)
 
     abs_spectrum = input_spec.abs()
     input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))
@@ -173,7 +173,7 @@ def model_eval_old(model, input_spec, configs, device="cpu", hid_size=64):
     return result, hid_out
 
 def model_eval_3_heads(model, input_spec, configs, device="cpu", hid_size=64):
-    input_spec = input_spec.to(device)
+    # input_spec = input_spec.to(device)
 
     abs_spectrum = input_spec.abs()
     input_spec_ = torch.stack((input_spec.abs(), input_spec.angle()), dim=-1).permute((0, 2, 3, 1))
@@ -194,7 +194,7 @@ def model_eval_3_heads(model, input_spec, configs, device="cpu", hid_size=64):
     return output_signal, output_noise, output_rir, hid_out
 
 def model_eval_fspen2x_ver3(model, input_spec, device="cpu", hid_size=64):
-    input_spec = input_spec.to(device)
+    # input_spec = input_spec.to(device)
 
     abs_spectrum = input_spec.abs()
     input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))

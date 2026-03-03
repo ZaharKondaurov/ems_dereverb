@@ -18,6 +18,7 @@ from typing import Union, Tuple, Callable, List, Dict
 from random import shuffle, randint, choice, uniform
 
 from time import time
+import pandas as pd
 
 WALLS_KEYWORDS = ["hard_surface", "ceramic_tiles", "plasterboard", "wooden_lining", "glass_3mm"]    # Убрать материалы
 FLOOR_KEYWORDS = ["linoleum_on_concrete", "carpet_cotton"]
@@ -41,7 +42,9 @@ class SignalDataset(ABC, Dataset):
                  partition: int = None,
                  noise_proba: float = 1.0,
                  rir_proba: float = 1.0,
-                 mode="train"):
+                 verbose: bool = False,
+                 log_file: str = None,
+                 mode: str = "train",):
 
         self.path = data_dir_path
         # self.signal_files = [x for x in os.listdir(self.path) if x[-3:] == "wav"]
@@ -98,6 +101,8 @@ class SignalDataset(ABC, Dataset):
         self.noise_proba = noise_proba
         self.rir_proba = rir_proba
         self.epoch = 0
+        self.verbose = verbose
+        self.log_file = log_file
 
     # @staticmethod
     # def simulate_noise(signal: torch.Tensor, noise: torch.Tensor, snr_db: int) -> torch.Tensor:
@@ -356,6 +361,21 @@ class SignalDataset(ABC, Dataset):
             noise, _ = SignalDataset.normalize_audio(noise)
         if rir_component is not None:
             rir_component, _ = SignalDataset.normalize_audio(rir_component)
+
+
+        if self.verbose:
+            to_print = [filename]
+            if self.rir_dir is not None:
+                df = pd.read_csv(os.path.join(os.path.dirname(filename_rir), "meta.csv"))
+                result = df[df["filepath"] == filename_rir]
+                to_print.extend([filename_rir, result["rt60"].iloc[0]])
+            if self.noise_dir is not None:
+                to_print.extend([filename_noise, snr_db])
+            # print(filename, filename_rir, result["rt60"].iloc[0])
+            print(*to_print)
+        
+        # if self.log_file is not None:
+
 
         if self.max_seq_len is not None:
             # start = np.randint(0, max(0,output.shape[-1] - self.max_seq_len))
@@ -624,6 +644,7 @@ class TRUNetDataset(SignalDataset):
                  partition: int = None,
                  noise_proba: float = 1.0,
                  rir_proba: float = 1.0,
+                 verbose: bool = False,
                  mode="train",):
 
         super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
@@ -631,7 +652,7 @@ class TRUNetDataset(SignalDataset):
                                             room_square=room_square,
                                             room_height=room_height, return_noise=return_noise,
                                             return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
-                                            noise_proba=noise_proba, rir_proba=rir_proba, mode=mode)
+                                            noise_proba=noise_proba, rir_proba=rir_proba, verbose=verbose, mode=mode)
 
     @staticmethod
     def _preprocess(signal: torch.Tensor) -> torch.Tensor:
