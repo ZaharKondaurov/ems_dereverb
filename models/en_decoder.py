@@ -40,7 +40,8 @@ class FullBandEncoderBlock(nn.Module):
 
 class FullBandDecoderBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int, padding: int, output_padding: int=0,
-                 conv: nn.Module = nn.Conv1d, conv_transposed: nn.Module = nn.ConvTranspose1d, normalize: bool = True, is_sub: bool = False):
+                 conv: nn.Module = nn.Conv1d, conv_transposed: nn.Module = nn.ConvTranspose1d, normalize: bool = True, is_sub: bool = False, 
+                 split_act: bool = False):
         super().__init__()
         self.conv = nn.Conv1d(in_channels=in_channels, out_channels=in_channels // 2,
                               kernel_size=1, stride=1, padding=0)
@@ -57,6 +58,11 @@ class FullBandDecoderBlock(nn.Module):
         else:
             self.activate = nn.ELU()
 
+        self.split_act = split_act
+        if split_act:
+            self.act1 = nn.ReLU()
+            self.act2 = nn.ELU()
+
     def forward(self, encode_complex_spectrum: Tensor, decode_complex_spectrum):
         """
         :param decode_complex_spectrum: (batch * frames, channels1, frequency)
@@ -70,7 +76,15 @@ class FullBandDecoderBlock(nn.Module):
         complex_spectrum = self.convT(complex_spectrum)
         # print("decode convT out:", complex_spectrum.size())
         complex_spectrum = self.norm(complex_spectrum)
-        complex_spectrum = self.activate(complex_spectrum)
+        if not self.split_act:
+            complex_spectrum = self.activate(complex_spectrum)
+        else:
+            _, channels, _ = complex_spectrum.shape
+            abs_part, phase_part = complex_spectrum[:, :channels//2, :], complex_spectrum[:, channels//2:, :]
+            abs_part = self.act1(abs_part)
+            phase_part = self.act2(phase_part)
+            # print(abs_part.shape, phase_part.shape)
+            complex_spectrum = torch.concat([abs_part, phase_part], dim=1)
 
         return complex_spectrum
 
