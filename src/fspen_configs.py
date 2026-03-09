@@ -1,9 +1,11 @@
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 from torch.nn import Conv1d, ConvTranspose1d
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from src.causal_convs import CausalConv1d, CausalConvTranspose1d
+
+from math import log2
 
 def get_sub_bands(band_parameters: dict):
     group_bands = list()
@@ -17,7 +19,111 @@ def get_sub_bands(band_parameters: dict):
 
     return tuple(group_bands), tuple(group_band_width)
 
+def get_cnn(in_channels, kernel_size, padding, stride, out_channels, layers, channel_step=2):
+    encoder: Dict[str, dict] = {}
+    for i in range(1, layers + 1):
+        encoder[f"encoder{i}"] = {"in_channels": in_channels, "out_channels": min(in_channels * channel_step, out_channels), "kernel_size": kernel_size, "stride": stride, "padding": padding}
+        if i == layers:
+            encoder[f"encoder{i}"] = {"in_channels": in_channels, "out_channels": out_channels, "kernel_size": kernel_size, "stride": stride, "padding": padding}
+        in_channels = min(channel_step * in_channels, out_channels)
+        if i <= layers // 2:
+            kernel_size += 2
+            padding += 1
+        else:
+            kernel_size -= 2
+            padding -= 1
+        
+    return encoder
 
+def build_sub_band_decoder_params(sbe: Dict[str, dict], width: Tuple[int]):
+    params = list(sbe.values())
+    sbd = {}
+    for i in range(len(params)):
+        d = {"width": width[i], "convs": []}
+        # print(params[i])
+        convs = list(params[i]["convs"])[::-1]
+        for conv in convs:
+            # print(conv)
+            d["convs"].append({"in_channels": conv["out_channels"] * 2, "out_channels": conv["in_channels"], 
+                               "kernel_size": conv["kernel_size"], "stride": conv["stride"], "padding": conv["padding"]})
+        sbd[f"decoder{i + 1}"] = d
+    return sbd
+
+def get_widths(n_fft, num_sub_bands):
+    widths = [n_fft // 2]
+    for _ in range(num_sub_bands - 1):
+        widths.append(widths[-1] // 2)
+        widths[-2] = widths[-2] // 2
+    widths[0] += 1
+    widths = widths[::-1]
+    return widths
+
+def get_full_band_decoder(full_band_encoder):
+    full_band_decoder: Dict[str, dict] = {}
+    for i, vals in enumerate(list(full_band_encoder.values())[::-1]):
+        full_band_decoder[f"decoder{i}"] = {"in_channels": vals["out_channels"] * 2, "out_channels": vals["in_channels"], 
+                                            "kernel_size": vals["kernel_size"], "stride": vals["stride"], "padding": vals["padding"]}
+    return full_band_decoder
+
+def get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=2):
+    start_freq = 0
+    sub_band_encoder: Dict[str, dict] = {}
+    for i in range(1, len(widths) + 1):
+        sub_band_encoder[f"encoder{i}"] = {"group_width": widths[i - 1], 
+                                           "bounds": {"start_frequency": start_freq, "end_frequency": start_freq + widths[i - 1]},
+                                           "convs": []}
+        sub_band_encoder[f"encoder{i}"]["convs"] = list(get_cnn(in_channels=1, kernel_size=4, stride=2, padding=1, out_channels=channels,
+                                            layers=sub_band_layers, channel_step=channel_step).values())
+    return sub_band_encoder
+
+def get_end_bands(widths, sub_band_layers):
+    end_bands = []
+    for width in widths:
+        end_bands.append(width // (2 ** sub_band_layers))
+    return end_bands
+
+class TrainConfig_explicit(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 1024
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 32 
+    sub_band_layers: int = 1
+    num_sub_bands_groups: int = 6
+
+    channel_step: int = 4
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    widths: List[int] = get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+            
 class TrainConfig(BaseModel):
     sample_rate: int = 16000
     n_fft: int = 512
@@ -104,6 +210,9 @@ class TrainConfig_48khz(BaseModel):
                                                   "out_channels": 32, "kernel_size": 20, "stride": 7, "padding": 0}}, # 6
     }
     merge_split: dict = {"channels": 128, "bands": 32, "compress_rate": 2}
+
+    num_bands_out: int = 64
+
     bands_num_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[0]
     band_width_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[1]
 
@@ -122,19 +231,6 @@ class TrainConfig_48khz(BaseModel):
             if decoder["out_feature"] < 2:
                 raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
 
-def build_sub_band_decoder_params(sbe: Dict[str, dict], width: Tuple[int]):
-    params = list(sbe.values())
-    sbd = {}
-    for i in range(len(params)):
-        d = {"width": width[i], "convs": []}
-        # print(params[i])
-        convs = list(params[i]["convs"])[::-1]
-        for conv in convs:
-            # print(conv)
-            d["convs"].append({"in_channels": conv["out_channels"] * 2, "out_channels": conv["in_channels"], 
-                               "kernel_size": conv["kernel_size"], "stride": conv["stride"], "padding": conv["padding"]})
-        sbd[f"decoder{i + 1}"] = d
-    return sbd
 
 class TrainConfig_48kHz_enc_ext_lay_1(BaseModel):
     sample_rate: int = 48_000

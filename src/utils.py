@@ -127,7 +127,7 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     batch, frames, channels, frequency = input_spec_.shape
     abs_spectrum = torch.permute(abs_spectrum, dims=(0, 2, 1))
     abs_spectrum = torch.reshape(abs_spectrum, shape=(batch, frames, 1, frequency))
-    h0 = [[torch.zeros(1, batch * hid_size, 16, device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
+    h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * configs.num_bands_out, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
 
     output, hid_out = model(input_spec_, abs_spectrum, h0)
     # print(output.shape, input_spec.angle().shape)
