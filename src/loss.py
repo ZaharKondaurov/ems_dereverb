@@ -17,6 +17,47 @@ def _compute_mr(Y: torch.Tensor, Y_abs: torch.Tensor, S: torch.Tensor, S_abs: to
 def anti_wrapping_function(x):
     return torch.abs(x - torch.round(x / (2 * torch.pi)) * 2 * torch.pi)
 
+def loss_clipping_penalty(input: torch.Tensor, tau: float = 0.99, p: int = 1):
+    return torch.mean(F.relu(input.abs() - tau) ** p)
+
+def loss_compressed_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False, lambd=0.3) -> torch.Tensor:
+    if nffts is None:
+        nffts = [1024, 512, 256]
+    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
+    loss = torch.zeros((), device=input.device, dtype=input.dtype)
+    for nfft in nffts:
+        Y = torch.stft(
+            input,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=input.device),
+            normalized=True,
+            return_complex=True,
+        )
+        S = torch.stft(
+            target,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=target.device),
+            normalized=True,
+            return_complex=True,
+        )
+
+        if not pcs:
+            Y = use_pcs(Y, nfft)
+            
+        Y_abs = Y.abs()
+        S_abs = S.abs()
+
+        if (gamma != 1) and (not pcs):
+            Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
+            S_abs = S_abs.clamp_min(1e-12).pow(gamma)
+
+        loss += (1 - lambd) * torch.mean((Y_abs - S_abs).abs() ** 2) + lambd * torch.mean(torch.abs(Y_abs * (Y / (torch.abs(Y) + 1e-9)) - S_abs * (S / (torch.abs(S) + 1e-9))) ** 2)
+
+    return (loss / len(nffts)).mean()
+
+
 def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
