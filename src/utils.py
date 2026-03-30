@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 from termcolor import colored
 from collections import defaultdict
@@ -24,6 +25,49 @@ def beautiful_int(i):
 def vorbis_window(winlen, device="cuda"):
     sq = torch.sin(torch.pi/2*(torch.sin(torch.pi/winlen*(torch.arange(winlen)-0.5))**2)).float()
     return sq
+
+
+def create_warmup_cosine_scheduler(
+    optimizer,
+    warmup_epochs: int,
+    total_epochs: int,
+    warmup_start_lr: float = 1e-6,
+    base_lr: float = 1e-3,
+    eta_min: float = 0.0
+):
+    """
+    Создает scheduler: линейный warmup до base_lr, затем cosine annealing.
+    
+    Args:
+        optimizer: Оптимизатор
+        warmup_epochs: Кол-во эпох для warmup
+        total_epochs: Общее кол-во эпох
+        warmup_start_lr: Начальный LR для warmup
+        base_lr: Пиковый LR (начало cosine)
+        eta_min: Минимальный LR для cosine
+    """
+    # LinearLR: start_factor умножается на initial_lr оптимизатора
+    # Устанавливаем initial_lr = base_lr, start_factor = warmup_start_lr / base_lr
+    scheduler_warmup = LinearLR(
+        optimizer, 
+        start_factor=warmup_start_lr / base_lr, 
+        total_iters=warmup_epochs
+    )
+    
+    scheduler_cosine = CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+        eta_min=eta_min
+    )
+    
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[scheduler_warmup, scheduler_cosine],
+        milestones=[warmup_epochs]
+    )
+    
+    return scheduler
+
 
 def mag_phase_stft(y, n_fft, hop_size, win_size, compress_factor=1.0, center=True, addeps=False):
     """
@@ -129,6 +173,9 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     abs_spectrum = torch.reshape(abs_spectrum, shape=(batch, frames, 1, frequency))
     h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * configs.num_bands_out, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
 
+    assert torch.isnan(input_spec_).any().item() is False, "input_spec has NaNs"
+    assert torch.isnan(abs_spectrum).any().item() is False, "abs_spectrum has NaNs"
+
     output, hid_out = model(input_spec_, abs_spectrum, h0)
     # print(output.shape, input_spec.angle().shape)
     # output = torch.concat([output, input_spec.angle()])
@@ -138,6 +185,9 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     # output = torch.polar(output.contiguous()[..., 0], input_spec.angle())
     # output = torch.view_as_complex(output.contiguous())
     output = torch.permute(output, dims=(0, 3, 1, 2))
+    assert torch.isnan(output[..., 0]).any().item() is False, "abs output has NaNs"
+    assert torch.isnan(output[..., 1]).any().item() is False, "phase output has NaNs"
+
     output = torch.polar(output[..., 0], output[..., 1])
 
     return output, hid_out

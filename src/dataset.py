@@ -367,7 +367,9 @@ class SignalDataset(ABC, Dataset):
             to_print = [filename]
             if self.rir_dir is not None:
                 df = pd.read_csv(os.path.join(os.path.dirname(filename_rir), "meta.csv"))
-                result = df[df["filepath"] == filename_rir]
+                df["filepath"] = df["filepath"].apply(lambda x: x.split("/")[-1])
+                # print(df["filepath"])
+                result = df[df["filepath"] == filename_rir.split("/")[-1]]
                 to_print.extend([filename_rir, result["rt60"].iloc[0]])
             if self.noise_dir is not None:
                 to_print.extend([filename_noise, snr_db])

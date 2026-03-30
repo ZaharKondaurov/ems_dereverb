@@ -91,20 +91,42 @@ class DualPathExtensionRNN(nn.Module):
         intra_out = torch.reshape(intra_out, shape=(B * T, F, N))
         # with profiler.record_function("Intra RNN forward"):
         intra_out, _ = self.intra_chunk_rnn(intra_out)
+
+        assert torch.isnan(intra_out).any().item() is False, "intra_chunk_rnn out has NaNs"
+        # if torch.isnan(intra_out).any().item() is True:
+        #     print(f"intra_chunk_rnn out has NaNs")
+
         intra_out = self.intra_chunk_fc(intra_out)  # (B, T, F, N)
+
+        assert torch.isnan(intra_out).any().item() is False, "intra_chunk_fc out has NaNs"
+        # if torch.isnan(intra_out).any().item() is True:
+        #     print(f"intra_chunk_fc out has NaNs")
+
         intra_out = torch.reshape(intra_out, shape=(B, T, F, N))
         intra_out = torch.transpose(intra_out, dim0=1, dim1=2).contiguous()  # (B, F, T, N)
         intra_out = self.intra_chunk_norm(intra_out)  # (B, F, T, N)
 
+        assert torch.isnan(intra_out).any().item() is False, "intra_chunk_norm out has NaNs"
+        # if torch.isnan(intra_out).any().item() is True:
+        #     print(f"intra_chunk_norm out has NaNs")
+
         intra_out = inputs + intra_out  # residual add
+        assert torch.isnan(intra_out).any().item() is False, "residual out has NaNs"
 
         inter_out = torch.reshape(intra_out, shape=(B * F, T, N))  # (B*F, T, N)
         # with profiler.record_function("Inter RNN forward"):
         inter_out, hidden_state = self.inter_chunk_rnn(inter_out, hidden_state)
+
+        assert torch.isnan(intra_out).any().item() is False, "inter_chunk_rnn out has NaNs"
+
         inter_out = torch.reshape(inter_out, shape=(B, F, T, -1))  # (B, F, T, groups * N)
         inter_out = self.inter_chunk_fc(inter_out)  # (B, F, T, N)
 
+        assert torch.isnan(intra_out).any().item() is False, "inter_chunk_fc out has NaNs"
+
         inter_out = inter_out + intra_out  # residual add
+
+        assert torch.isnan(intra_out).any().item() is False, "final residual out has NaNs"
 
         return inter_out, hidden_state
 

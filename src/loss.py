@@ -107,6 +107,58 @@ def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts
     return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
 
 
+def loss_MR_low_bins(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
+    if nffts is None:
+        nffts = [1024, 512, 256]
+    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
+    loss = torch.zeros((), device=input.device, dtype=input.dtype)
+    for nfft in nffts:
+        Y = torch.stft(
+            input,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=input.device),
+            normalized=True,
+            return_complex=True,
+        )
+        S = torch.stft(
+            target,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=target.device),
+            normalized=True,
+            return_complex=True,
+        )
+
+        Y = Y[:, Y.shape[1] // 24, :]
+        S = S[:, S.shape[1] // 24, :]
+
+        if not pcs:
+            Y = use_pcs(Y, nfft)
+            
+        Y_abs = Y.abs()
+        S_abs = S.abs()
+        # Try loss for angle
+        # Y_angle = Y.angle()
+        # S_angle = S.angle()
+        if (gamma != 1) and (not pcs):
+            Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
+            S_abs = S_abs.clamp_min(1e-12).pow(gamma)
+            # Y_angle = Y_angle.clamp_min(1e-12).pow(gamma)
+            # S_angle = S_angle.clamp_min(1e-12).pow(gamma)
+        # print(Y_abs.shape, nfft)
+        low_sub_band_0 = int((nfft // 2 + 1) * 0.1)
+        low_sub_band_1 = int((nfft // 2 + 1) * 0.25)
+        low_sub_band_2 = int((nfft // 2 + 1) * 0.5)
+        loss += _compute_mr(Y, Y_abs, S, S_abs)
+                #  _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
+                #  _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
+                #  _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :]))
+    #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
+    # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
+    return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
+
+
 def loss_MR_PCS(input: torch.Tensor, target: torch.Tensor, nffts: list = None, hop_fr: float = 0.25) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
