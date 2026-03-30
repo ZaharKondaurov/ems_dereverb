@@ -123,7 +123,178 @@ class TrainConfig_explicit(BaseModel):
         if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
             raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
         return self
+    
+    
+class TrainConfig_explicit_512(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 512
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 32 
+    sub_band_layers: int = 1
+    num_sub_bands_groups: int = 5
+
+    channel_step: int = 4
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    widths: List[int] = get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+    
+class TrainConfig_explicit_2048(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 2048
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 64 
+    sub_band_layers: int = 1
+    num_sub_bands_groups: int = 7
+
+    channel_step: int = 4
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    widths: List[int] = get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+
+class TrainConfig_explicit_2048_ver2(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 2048
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 5
+    channels: int = 64 
+    sub_band_layers: int = 2
+    num_sub_bands_groups: int = 6
+
+    channel_step: int = 4
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    widths: List[int] = get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
             
+
+class TrainConfig_explicit_2048_ver3(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 2048
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 5
+    channels: int = 32
+    sub_band_layers: int = 3
+    num_sub_bands_groups: int = 6
+
+    channel_step: int = 4
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    widths: List[int] = get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+
+
 class TrainConfig(BaseModel):
     sample_rate: int = 16000
     n_fft: int = 512
@@ -704,8 +875,10 @@ class TrainConfig48kHzEnc(BaseModel):
     dual_path_extension: dict = {
         "num_modules": 3,
         "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
-                       "groups": 8, "rnn_type": "GRU"}
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
     }
+
+    num_bands_out: int = 64
 
     @field_validator("sub_band_decoder")
     def sub_band_decoder_validate(cls, decoders):

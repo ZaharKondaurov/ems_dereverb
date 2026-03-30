@@ -8,7 +8,7 @@ class FullBandEncoderBlock(nn.Module):
                  conv: nn.Module = nn.Conv1d, normalize: bool = True, is_sub: bool = False):
         super().__init__()
         self.conv = nn.Conv1d(in_channels=in_channels, out_channels=out_channels,
-                              kernel_size=kernel_size, stride=stride, padding=padding)
+                              kernel_size=kernel_size, stride=stride, padding=padding, padding_mode="zeros")
 
         if normalize:
             self.norm = nn.BatchNorm1d(num_features=out_channels)
