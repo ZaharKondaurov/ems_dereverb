@@ -96,7 +96,7 @@ class DualPathExtensionRNN(nn.Module):
         # if torch.isnan(intra_out).any().item() is True:
         #     print(f"intra_chunk_rnn out has NaNs")
 
-        intra_out = self.intra_chunk_fc(intra_out)  # (B, T, F, N)
+        intra_out = self.intra_chunk_fc(intra_out)  # (B * T, F, N)
 
         assert torch.isnan(intra_out).any().item() is False, "intra_chunk_fc out has NaNs"
         # if torch.isnan(intra_out).any().item() is True:
