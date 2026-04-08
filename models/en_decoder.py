@@ -41,7 +41,7 @@ class FullBandEncoderBlock(nn.Module):
 
 class FullBandDecoderBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int, padding: int, output_padding: int=0,
-                 conv: nn.Module = nn.Conv1d, conv_transposed: nn.Module = nn.ConvTranspose1d, normalize: bool = True, split_act: bool = False, is_sub: bool = False):
+                 conv: nn.Module = nn.Conv1d, conv_transposed: nn.Module = nn.ConvTranspose1d, mag_act: nn.Module = nn.ReLU, normalize: bool = True, split_act: bool = False, is_sub: bool = False):
         super().__init__()
         self.conv = nn.Conv1d(in_channels=in_channels, out_channels=in_channels // 2,
                               kernel_size=1, stride=1, padding=0)
@@ -56,11 +56,11 @@ class FullBandDecoderBlock(nn.Module):
         self.split_act = split_act
 
         if split_act:
-            self.act1 = nn.ReLU()
+            self.act1 = mag_act() # nn.ReLU()
             self.act2 = nn.ELU() # nn.Tanh()
         else:
             if is_sub:
-                self.activate = nn.ReLU()
+                self.activate = mag_act() # nn.ReLU()
             else:
                 self.activate = nn.ELU()
 

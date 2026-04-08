@@ -182,6 +182,26 @@ class FullBandDecoder(nn.Module):
             assert torch.isnan(feature).any().item() is False, f"fullband dec conv_{i} out has NaNs"
 
         return feature
+    
+
+class FullBandDecoder_ver2(nn.Module):
+    def __init__(self, configs: TrainConfig):
+        super().__init__()
+        self.full_band_decoders = nn.ModuleList()
+        fbd_items = configs.full_band_decoder.items()
+        for ind, (decoder_name, parameters) in enumerate(fbd_items):
+            split_act = False
+            if ind == len(fbd_items) - 1:
+                split_act = True
+            self.full_band_decoders.append(
+                FullBandDecoderBlock(**parameters, split_act=split_act, mag_act=nn.Sigmoid))
+
+    def forward(self, feature: Tensor, encode_outs: list):
+        for i, (decoder, encode_out) in enumerate(zip(self.full_band_decoders, encode_outs)):
+            feature = decoder(feature, encode_out)
+            assert torch.isnan(feature).any().item() is False, f"fullband dec conv_{i} out has NaNs"
+
+        return feature
 
 
 class SubBandDecoder(nn.Module):
@@ -303,7 +323,7 @@ class SubBandDecoder_ver3(nn.Module):
                 is_sub = False
                 if ind == len(layer_parameters["convs"]) - 1:
                     is_sub = True
-                sub_band_layer.append(FullBandDecoderBlock(**conv_parameters, normalize=False, split_act=False, is_sub=is_sub))
+                sub_band_layer.append(FullBandDecoderBlock(**conv_parameters, normalize=False, split_act=False, is_sub=is_sub, mag_act=nn.Sigmoid))
                 with torch.no_grad():
                     y = torch.zeros_like(x)
                     x = sub_band_layer[-1](x, y)
@@ -1146,7 +1166,7 @@ class FullSubPathExtension_ver3(nn.Module):
     
 
 class FullSubPathExtension_ver3_unfold(nn.Module):
-    def __init__(self, configs: TrainConfig_explicit, need_mask: bool = True):
+    def __init__(self, configs: TrainConfig_explicit, need_mask: bool = True, last_signoid: bool = False):
         super().__init__()
         self.full_band_encoder = FullBandEncoder(configs)
         # self.sub_band_encoder = SubBandEncoder(configs) # SubBandEncoder_ver2(configs)
@@ -1179,7 +1199,7 @@ class FullSubPathExtension_ver3_unfold(nn.Module):
             nn.ELU()
         )
 
-        self.full_band_decoder = FullBandDecoder(configs)
+        self.full_band_decoder = FullBandDecoder_ver2(configs)
         # self.sub_band_decoder = SubBandDecoder(configs) # SubBandDecoder_ver2(configs)
         self.sub_band_decoder = SubBandDecoder_ver3(configs)
 
@@ -1191,6 +1211,31 @@ class FullSubPathExtension_ver3_unfold(nn.Module):
         self.fold = nn.Fold((1, configs.n_fft // 2), (1, configs.unfold_size), padding=(0, configs.unfold_padding), stride=(1, configs.unfold_step))
         self.fold_ones = nn.Fold((1, configs.n_fft // 2), (1, configs.unfold_size), padding=(0, configs.unfold_padding), stride=(1, configs.unfold_step))
 
+        # self.last_signoid = last_signoid
+        # if self.last_signoid:
+        #     self.sigmoid_fb = nn.Sigmoid()
+        #     self.sigmoid_sb = nn.Sigmoid()
+
+
+    @staticmethod
+    def print_spec(fb_mask, sb_mask, fb_out, sb_out):
+        plt.figure(figsize=(20, 10))
+        plt.subplot(2, 2, 1)
+        plt.imshow(fb_mask[0, :, 0].detach().permute(1, 0).numpy(), aspect='auto', origin='lower', norm=LogNorm(vmin=1e-3, vmax=1))
+        plt.title("Full Band Mask")
+        plt.colorbar()
+        plt.subplot(2, 2, 2)
+        plt.imshow(sb_mask[0, :, 0].detach().permute(1, 0).numpy(), aspect='auto', origin='lower', norm=LogNorm(vmin=1e-3, vmax=1))
+        plt.title("Sub Band Mask")
+        plt.colorbar()
+        plt.subplot(2, 2, 3)
+        plt.imshow(fb_out[0, :, 0].detach().permute(1, 0).numpy(), aspect='auto', origin='lower', norm=LogNorm(vmin=1e-3, vmax=1))
+        plt.title("Full Band Masked Output")
+        plt.colorbar()
+        plt.subplot(2, 2, 4)
+        plt.imshow(sb_out[0, :, 0].detach().permute(1, 0).numpy(), aspect='auto', origin='lower', norm=LogNorm(vmin=1e-3, vmax=1))
+        plt.title("Sub Band Masked Output")
+        plt.colorbar()
 
     def forward(self, in_complex_spectrum: Tensor, in_amplitude_spectrum: Tensor, hidden_state: list):
         """
@@ -1268,6 +1313,7 @@ class FullSubPathExtension_ver3_unfold(nn.Module):
         sub_band_mask = sub_band_mask.reshape(batch * frames, self.chunk_size, -1)
         # print(sub_band_mask.shape)
 
+        # if not self.training:
         ones = torch.ones_like(sub_band_mask)
 
         norm_map = self.fold_ones(ones)
@@ -1275,6 +1321,8 @@ class FullSubPathExtension_ver3_unfold(nn.Module):
         sub_band_mask = self.fold(sub_band_mask)
 
         sub_band_mask = sub_band_mask / (norm_map + 1e-8)
+        # else:
+        #     sub_band_mask = self.fold(sub_band_mask)
 
         sub_band_mask = torch.reshape(sub_band_mask, shape=(batch, frames, 1, -1))
 
@@ -1283,6 +1331,13 @@ class FullSubPathExtension_ver3_unfold(nn.Module):
         if self.need_mask:
             full_band_mask = self.mask_padding(full_band_mask) # uncomment for all modeles except TrainConfig48kHzEnc2x_ver1
         sub_band_mask = self.mask_padding(sub_band_mask)
+
+        # if self.last_signoid:
+        #     full_band_mask_abs, full_band_mask_pha = full_band_mask[:, :, 0:1, :], full_band_mask[:, :, 1:2, :]
+        #     full_band_mask_abs = self.sigmoid_fb(full_band_mask_abs)
+        #     full_band_mask = torch.cat([full_band_mask_abs, full_band_mask_pha], dim=2)
+        #     sub_band_mask = self.sigmoid_sb(sub_band_mask)
+
         # print(in_complex_spectrum.shape, full_band_mask.shape)
         full_band_out = in_complex_spectrum * full_band_mask
         assert torch.isnan(full_band_out).any().item() is False, f"full_band_out has NaNs"
@@ -1291,6 +1346,8 @@ class FullSubPathExtension_ver3_unfold(nn.Module):
         # outputs is (batch, frames, 2, frequency), complex style.
 
         full_band_out[:, :, 0:1, :] = (full_band_out[:, :, 0:1, :] + sub_band_out) / 2
+        # print("Greater than 1.0 in fb:", (full_band_mask[:, :, 0:1, :] > 1.0).any(), full_band_mask[:, :, 0:1, :22].numel(), len(list([x.item() for x in full_band_mask[:, :, 0:1, :22].flatten() if x > 1.])))
+        # print("Greater than 1.0 in sb:", (sub_band_mask > 1.0).any(), sub_band_mask[:, :, 0:1, :22].numel(), len(list([x.item() for x in sub_band_mask[:, :, 0:1, :22].flatten() if x > 1.])))
         assert torch.isnan(full_band_out[:, :, 0:1, :]).any().item() is False, f"full_band_out[:, :, 0:1, :] has NaNs"
         return full_band_out, out_hidden_state
     
