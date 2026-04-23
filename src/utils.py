@@ -161,7 +161,7 @@ def model_num_params(model, verbose_all=True, verbose_only_learnable=False):
         )
     return sum_params, sum_learnable_params
 
-def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
+def model_eval(model, input_spec, configs, device="cpu", hid_size=64, h0=None):
     # input_spec = input_spec.to(device)
 
     abs_spectrum = input_spec.abs()
@@ -171,7 +171,8 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
     batch, frames, channels, frequency = input_spec_.shape
     abs_spectrum = torch.permute(abs_spectrum, dims=(0, 2, 1))
     abs_spectrum = torch.reshape(abs_spectrum, shape=(batch, frames, 1, frequency))
-    h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * configs.num_bands_out, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
+    if h0 is None:
+        h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * configs.num_bands_out, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
 
     assert torch.isnan(input_spec_).any().item() is False, "input_spec has NaNs"
     assert torch.isnan(abs_spectrum).any().item() is False, "abs_spectrum has NaNs"
@@ -192,17 +193,18 @@ def model_eval(model, input_spec, configs, device="cpu", hid_size=64):
 
     return output, hid_out
 
-def model_eval_old(model, input_spec, configs, device="cpu", hid_size=64):
+def model_eval_old(model, input_spec, configs, device="cpu", hid_size=64, h0=None):
     # input_spec = input_spec.to(device)
 
-    abs_spectrum = input_spec.abs()
+    abs_spectrum = input_spec.abs().to(input_spec.device)
     input_spec_ = torch.permute(torch.view_as_real(input_spec), dims=(0, 2, 3, 1))
     # input_spec_ = torch.stack((input_spec.abs(), input_spec.angle()), dim=-1).permute((0, 2, 3, 1))
 
     batch, frames, channels, frequency = input_spec_.shape
     abs_spectrum = torch.permute(abs_spectrum, dims=(0, 2, 1))
     abs_spectrum = torch.reshape(abs_spectrum, shape=(batch, frames, 1, frequency))
-    h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * hid_size, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
+    if h0 is None:
+        h0 = [[torch.zeros(configs.dual_path_extension["parameters"]["num_layers"], batch * configs.num_bands_out, configs.dual_path_extension["parameters"]["inter_hidden_size"], device=input_spec.device) for _ in range(8)] for _ in range(configs.dual_path_extension["num_modules"])]
 
     output, abs_addon, hid_out = model(input_spec_, abs_spectrum, h0)
     # print(output.shape, input_spec.angle().shape)
