@@ -44,16 +44,19 @@ class SignalDataset(ABC, Dataset):
                  rir_proba: float = 1.0,
                  verbose: bool = False,
                  log_file: str = None,
+                 shuffle_files: bool = True,
                  mode: str = "train",):
 
         self.path = data_dir_path
         # self.signal_files = [x for x in os.listdir(self.path) if x[-3:] == "wav"]
         self.audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
         # print([os.path.splitext(f)[1] for r, d, fs in os.walk(self.path) for f in fs])
-        self.signal_files = [os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
+        self.signal_files = sorted([os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions]) #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
         if partition is not None:
             self.signal_files = self.signal_files[:partition]
-        shuffle(self.signal_files)
+
+        if shuffle_files: 
+            shuffle(self.signal_files)
 
         self.sr = sr
         self.snr = snr
@@ -72,6 +75,7 @@ class SignalDataset(ABC, Dataset):
         if self.noise_dir is not None:
             self.noise_files = [os.path.join(r, f) for r, d, fs in os.walk(self.noise_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] # os.listdir(noise_dir)
             shuffle(self.noise_files)
+            print(len(self.noise_files))
 
         self.rir_dir = rir_dir
         # self.rir_dir_target = rir_dir_target
@@ -88,6 +92,7 @@ class SignalDataset(ABC, Dataset):
         if self.rir_dir is not None:
             self.rir_files = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] # os.listdir(rir_dir)
             shuffle(self.rir_files)
+            print(len(self.rir_files))
             # if rir_target:
             #     self.rir_files_target = [os.path.join(r + "_target", f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"]
 
@@ -304,6 +309,9 @@ class SignalDataset(ABC, Dataset):
             # rir, _ = SignalDataset.normalize_audio(rir)
 
             rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='full', axes=-1))
+            # assert torch.isnan(rir).any().item() is False, "rir in dataset has NaNs"
+            # assert torch.isnan(rir_signal).any().item() is False, "rir_signal in dataset has NaNs"
+            # assert torch.isnan(target_signal).any().item() is False, "target_signal in dataset has NaNs"
             rir_signal = rir_signal[..., :target_signal.shape[-1]]
 
             if self.rir_target:
@@ -351,11 +359,14 @@ class SignalDataset(ABC, Dataset):
             noise = self.simulate_noise(rir_signal, noise, snr_db)
             # print("Simulate noise:", time() - start)
             # print(noise.shape, rir_signal.shape)
+            # assert torch.isnan(noise).any().item() is False, "noise in dataset has NaNs"
             output = rir_signal + noise
         else:
             output = rir_signal
 
         target_signal, output = SignalDataset.normalize_audio(target_signal, output)
+        # assert torch.isnan(target_signal).any().item() is False, "target_signal in dataset has NaNs"
+        # assert torch.isnan(output).any().item() is False, "output in dataset has NaNs"
 
         if noise is not None:
             noise, _ = SignalDataset.normalize_audio(noise)
@@ -647,6 +658,7 @@ class TRUNetDataset(SignalDataset):
                  noise_proba: float = 1.0,
                  rir_proba: float = 1.0,
                  verbose: bool = False,
+                 shuffle_files: bool = True,
                  mode="train",):
 
         super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
@@ -654,7 +666,7 @@ class TRUNetDataset(SignalDataset):
                                             room_square=room_square,
                                             room_height=room_height, return_noise=return_noise,
                                             return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
-                                            noise_proba=noise_proba, rir_proba=rir_proba, verbose=verbose, mode=mode)
+                                            noise_proba=noise_proba, rir_proba=rir_proba, verbose=verbose, shuffle_files=shuffle_files, mode=mode)
 
     @staticmethod
     def _preprocess(signal: torch.Tensor) -> torch.Tensor:

@@ -1,4 +1,4 @@
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Union
 
 from torch.nn import Conv1d, ConvTranspose1d
 
@@ -23,11 +23,22 @@ def get_sub_bands(band_parameters: dict):
 
 def get_cnn(in_channels, kernel_size, padding, stride, out_channels, layers, channel_step=2):
     encoder: Dict[str, dict] = {}
+
+    step = channel_step
+    if isinstance(channel_step, tuple):
+        step = channel_step[0]
+
     for i in range(1, layers + 1):
-        encoder[f"encoder{i}"] = {"in_channels": in_channels, "out_channels": min(in_channels * channel_step, out_channels), "kernel_size": kernel_size, "stride": stride, "padding": padding}
+        encoder[f"encoder{i}"] = {"in_channels": in_channels, "out_channels": min(in_channels * step, out_channels), "kernel_size": kernel_size, "stride": stride, "padding": padding}
         if i == layers:
             encoder[f"encoder{i}"] = {"in_channels": in_channels, "out_channels": out_channels, "kernel_size": kernel_size, "stride": stride, "padding": padding}
-        in_channels = min(channel_step * in_channels, out_channels)
+        # if isinstance(channel_step, int):
+            # in_channels = min(in_channels * step, out_channels)
+        in_channels = min(step * in_channels, out_channels)
+        if isinstance(channel_step, tuple):
+            # print(step, channel_step)
+            step = channel_step[i % len(channel_step)]
+        
         if i <= layers // 2:
             kernel_size += 2
             padding += 1
@@ -221,6 +232,61 @@ class TrainConfig_explicit_unfold(BaseModel):
         if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
             raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
         return self
+    
+
+class TrainConfig_explicit_unfold_ver2(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 1024
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 32 
+    sub_band_layers: int = 4
+    # num_sub_bands_groups: int = 6
+
+    channel_step: Union[int, Tuple[int]] = (4, 2)
+
+    overlap: float = None
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+
+    unfold_size: int = 64
+    unfold_step: int = 32
+    unfold_padding: int = 16
+
+
+    partition: List[int] = None
+    num_chunks: int = (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1
+
+    widths: List[int] = _unfold_width(unfold_size, num_chunks)  # get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+
+    # sub_band_layers: int = (num_chunks * unfold_size)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=(2, 4))
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
 
 
 class TrainConfig_explicit_unfold_patitions(BaseModel):
@@ -251,7 +317,172 @@ class TrainConfig_explicit_unfold_patitions(BaseModel):
 
     # num_chunks: int = (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1
 
-    partition: List[int] = [2, 2, 2, 3, 3, 4]
+    partition: List[int] = [1, 1, 1, 1, 1, 1, 2, 2, 3, 3]
+    widths: List[int] = _unfold_width(unfold_size, (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1, partition)  # get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+    
+    num_chunks: int = len(widths)
+    # sub_band_layers: int = (num_chunks * unfold_size)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+    
+
+class TrainConfig_explicit_unfold_patitions_ver_2(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 1024
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 32 
+    sub_band_layers: int = 4
+    # num_sub_bands_groups: int = 6
+
+    channel_step: int = 4
+
+    overlap: float = None
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    unfold_size: int = 64
+    unfold_step: int = 32
+    unfold_padding: int = 16
+
+    # num_chunks: int = (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1
+
+    partition: List[int] = [4, 4, 4, 4]
+    widths: List[int] = _unfold_width(unfold_size, (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1, partition)  # get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+    
+    num_chunks: int = len(widths)
+    # sub_band_layers: int = (num_chunks * unfold_size)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+
+
+class TrainConfig_explicit_unfold_patitions_ver_3(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 1024
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 32 
+    sub_band_layers: int = 4
+    # num_sub_bands_groups: int = 6
+
+    channel_step: int = 4
+
+    overlap: float = None
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    unfold_size: int = 64
+    unfold_step: int = 32
+    unfold_padding: int = 16
+
+    # num_chunks: int = (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1
+
+    partition: List[int] = [2, 2, 2, 2, 2, 2, 2, 2]
+    widths: List[int] = _unfold_width(unfold_size, (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1, partition)  # get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
+    
+    num_chunks: int = len(widths)
+    # sub_band_layers: int = (num_chunks * unfold_size)
+
+    sub_band_encoder: Dict[str, dict] = get_sub_band_encoder(widths, sub_band_layers, channels, channel_step=channel_step)
+
+    end_bands: List[int] = get_end_bands(widths, sub_band_layers)
+    all_bands: int = sum(end_bands)
+
+    sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, end_bands)
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": channels // 2, "intra_hidden_size": channels // 2, "inter_hidden_size": channels // 2,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    @model_validator(mode="after")
+    def check_conditions(self):
+        # print(self.widths[-1])
+        if self.widths[0] // (2 ** self.sub_band_layers) <= 0:
+            raise ValueError(f"Too many layers is sub-band encoder. Reduce sub_band_layers or increase n_fft")
+        return self
+
+
+class TrainConfig_explicit_unfold_patitions_ver_4(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 1024
+    hop_length: int = n_fft // 2
+
+    num_full_band_layers: int = 3
+    channels: int = 32 
+    sub_band_layers: int = 4
+    # num_sub_bands_groups: int = 6
+
+    channel_step: int = 4
+
+    overlap: float = None
+
+    num_bands_out: int = n_fft // (2 ** (num_full_band_layers + 1))
+    merge_split: dict = {"channels": num_bands_out * 2, "bands": channels, "compress_rate": 2}
+
+    full_band_encoder: Dict[str, dict] = get_cnn(in_channels=2, kernel_size=6, padding=2, stride=2, out_channels=channels, 
+                                                 layers=int(log2((n_fft // 2) // num_bands_out)), channel_step=channel_step)
+
+    full_band_decoder: Dict[str, dict] = get_full_band_decoder(full_band_encoder)
+    
+    unfold_size: int = 64
+    unfold_step: int = 32
+    unfold_padding: int = 16
+
+    # num_chunks: int = (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1
+
+    partition: List[int] = [1, 1, 1, 1, 2, 2, 4, 4]
     widths: List[int] = _unfold_width(unfold_size, (hop_length + 2 * unfold_padding - unfold_size) // unfold_step + 1, partition)  # get_widths(n_fft=n_fft, num_sub_bands=num_sub_bands_groups)
     
     num_chunks: int = len(widths)
@@ -621,14 +852,69 @@ class TrainConfig(BaseModel):
     dual_path_extension: dict = {
         "num_modules": 3,
         "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
-                       "groups": 8, "rnn_type": "GRU"}
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
     }
+
+    num_bands_out: int = 32
 
     @field_validator("sub_band_decoder")
     def sub_band_decoder_validate(cls, decoders):
         for decoder in decoders:
             if decoder["out_feature"] < 2:
                 raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
+            
+
+class TrainConfig_baseline(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 512
+    hop_length: int = 256
+    train_frames: int = 62
+    train_points: int = (train_frames - 1) * hop_length
+
+    full_band_encoder: Dict[str, dict] = {
+        "encoder1": {"in_channels": 2, "out_channels": 4, "kernel_size": 6, "stride": 2, "padding": 2},
+        "encoder2": {"in_channels": 4, "out_channels": 16, "kernel_size": 8, "stride": 2, "padding": 3},
+        "encoder3": {"in_channels": 16, "out_channels": 32, "kernel_size": 6, "stride": 2, "padding": 2}
+    }
+    full_band_decoder: Dict[str, dict] = {
+        "decoder1": {"in_channels": 64, "out_channels": 16, "kernel_size": 6, "stride": 2, "padding": 2},
+        "decoder2": {"in_channels": 32, "out_channels": 4, "kernel_size": 8, "stride": 2, "padding": 3},
+        "decoder3": {"in_channels": 8, "out_channels": 2, "kernel_size": 6, "stride": 2, "padding": 2}
+    }
+
+    sub_band_encoder: Dict[str, dict] = {
+        "encoder1": {"group_width": 16, "conv": {"start_frequency": 0, "end_frequency": 16, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 4, "stride": 2, "padding": 1}},
+        "encoder2": {"group_width": 18, "conv": {"start_frequency": 16, "end_frequency": 34, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 7, "stride": 3, "padding": 2}},
+        "encoder3": {"group_width": 36, "conv": {"start_frequency": 34, "end_frequency": 70, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 11, "stride": 5, "padding": 2}},
+        "encoder4": {"group_width": 66, "conv": {"start_frequency": 70, "end_frequency": 136, "in_channels": 1,
+                                                 "out_channels": 32, "kernel_size": 20, "stride": 10, "padding": 4}},
+        "encoder5": {"group_width": 121, "conv": {"start_frequency": 136, "end_frequency": 257, "in_channels": 1,
+                                                  "out_channels": 32, "kernel_size": 30, "stride": 20, "padding": 5}}
+    }
+    merge_split: dict = {"channels": 64, "bands": 32, "compress_rate": 2}
+    bands_num_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[0]
+    band_width_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[1]
+
+    sub_band_decoder: Dict[str, dict] = {f"decoder{idx}": {"in_features": 64, "out_features": width}
+                                         for idx, width in enumerate(band_width_in_groups)}
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    num_bands_out: int = 32
+
+    @field_validator("sub_band_decoder")
+    def sub_band_decoder_validate(cls, decoders):
+        for decoder in decoders:
+            if decoder["out_feature"] < 2:
+                raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
+            
             
 class TrainConfig_48khz(BaseModel):
     sample_rate: int = 48000
@@ -1087,6 +1373,8 @@ class TrainConfig_48kHz_enc_ext(BaseModel):
     train_frames: int = 62
     train_points: int = (train_frames - 1) * hop_length
 
+    overlap: bool = False
+
     full_band_encoder: Dict[str, dict] = {
         "encoder1": {"in_channels": 2, "out_channels": 4, "kernel_size": 6, "stride": 2, "padding": 2},
         "encoder2": {"in_channels": 4, "out_channels": 16, "kernel_size": 8, "stride": 2, "padding": 3},
@@ -1144,6 +1432,8 @@ class TrainConfig_48kHz_enc_ext(BaseModel):
     sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(sub_band_encoder, [6, 6, 6, 6, 6, 6, 12, 16])
 
     merge_split: dict = {"channels": 128, "bands": 32, "compress_rate": 2}
+
+    num_bands_out: int = 64
 
     dual_path_extension: dict = {
         "num_modules": 3,

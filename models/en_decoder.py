@@ -56,11 +56,11 @@ class FullBandDecoderBlock(nn.Module):
         self.split_act = split_act
 
         if split_act:
-            self.act1 = mag_act() # nn.ReLU()
+            self.act1 = nn.Sigmoid()# nn.ReLU() # mag_act() # nn.ReLU()
             self.act2 = nn.ELU() # nn.Tanh()
         else:
             if is_sub:
-                self.activate = mag_act() # nn.ReLU()
+                self.activate = nn.Sigmoid() # nn.ReLU() # mag_act() # nn.ReLU()
             else:
                 self.activate = nn.ELU()
 
@@ -106,6 +106,43 @@ class SubBandEncoderBlock(nn.Module):
         self.conv = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
                               stride=stride, padding=padding)
         self.activate = nn.ELU() # nn.ReLU()
+
+    def forward(self, amplitude_spectrum: Tensor):
+        """
+        :param amplitude_spectrum: (batch*frames, channels, frequency)
+        :return:
+        """
+        # print(f"Input [{self.start_frequency, self.end_frequency}]:", amplitude_spectrum.shape)
+        sub_spectrum = amplitude_spectrum[:, :, self.start_frequency:self.end_frequency]
+        # print(f"Sub spectrum [{self.start_frequency, self.end_frequency}]:", sub_spectrum.shape)
+        # print("encoder in:", sub_spectrum.shape)
+        sub_spectrum = self.conv(sub_spectrum)  # (batch*frames, out_channels, sub_bands)
+        if torch.isnan(sub_spectrum).any().item() is True:
+            print(f"[{(self.start_frequency, self.end_frequency)}] Conv has NaNs: ", torch.isnan(sub_spectrum).any().item())
+        # print("encoder out:", sub_spectrum.shape)
+        sub_spectrum = self.activate(sub_spectrum)
+        if torch.isnan(sub_spectrum).any().item() is True:
+            print(f"[{(self.start_frequency, self.end_frequency)}] After activation: ", torch.isnan(sub_spectrum).any().item())
+        # print(f"Output [{self.start_frequency, self.end_frequency}]:", sub_spectrum.shape)
+        return sub_spectrum
+    
+
+class SubBandEncoderBlock_baseline(nn.Module):
+    def __init__(self, start_frequency: int,
+                 end_frequency: int,
+                 in_channels: int,
+                 out_channels: int,
+                 kernel_size: int,
+                 stride: int,
+                 padding: int,
+                 conv: nn.Module = nn.Conv1d,):
+        super().__init__()
+        self.start_frequency = start_frequency
+        self.end_frequency = end_frequency
+
+        self.conv = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
+                              stride=stride, padding=padding)
+        self.activate = nn.ReLU()
 
     def forward(self, amplitude_spectrum: Tensor):
         """
