@@ -14,21 +14,23 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchmetrics.audio import SpeechReverberationModulationEnergyRatio, ShortTimeObjectiveIntelligibility
 
 from einops import rearrange
 
 from src.dataset import SignalDataset, TRUNetDataset
-from src.loss import loss_tot, loss_MR, loss_MR_w
+from src.loss import loss_tot, loss_MR, loss_MR_w, phase_losses
 from NISQA_s.src.core.model_torch import model_init
 from NISQA_s.src.utils.process_utils import process
 from torch_stoi import NegSTOILoss
-from models.fspen import FullSubPathExtension
+from models.fspen import FullSubPathExtension, SubPathExtension, FullPathExtension
 
-from src.utils import model_eval, model_eval_fspen2x_ver3
+from src.utils import model_eval, model_eval_fspen2x_ver3, mag_phase_stft
 
 import librosa
+from IPython.display import Audio
 
 import matplotlib.pyplot as plt
 
@@ -40,7 +42,8 @@ import warnings
 
 # np.set_printoptions(precision=3)
 # torch.set_printoptions(precision=3)
-DATA_DIR = os.path.join("data", "wav48")
+# DATA_DIR = "/opt/software/datasets/urgent26_track2_se_dataset/simulation_train/clean/"  # os.path.join("data", "wav48")
+DATA_DIR = os.path.join("data", "wav48") # os.path.join("data", "test_audio")
 
 RIR_DIR = os.path.join("data", "rirs48")
 NOISE_DIR = os.path.join("data", "noise48")
@@ -64,15 +67,15 @@ gen = torch.Generator()
 gen.manual_seed(SEED)
 
 
-# In[ ]:
+# In[4]:
 
 
-# N_FFTS = 512
-# HOP_LENGTH = 256 # int(0.01625 * 16_000) # 256
-N_FFTS = 1024
-HOP_LENGTH = 512
+N_FFTS = 512
+HOP_LENGTH = 256 # int(0.01625 * 16_000) # 256
+# N_FFTS = 1024
+# HOP_LENGTH = 512
 SR = 48_000
-BATCH_SIZE = 14
+BATCH_SIZE = 12
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"It's {DEVICE} time!!!")
@@ -82,68 +85,45 @@ N_DEVICES = max(torch.cuda.device_count(), 1)
 # In[5]:
 
 
-# PCS = torch.ones(257, device=DEVICE)      # Perceptual Contrast Stretching
-# PCS[0:3] = 1
-# PCS[3:6] = 1.070175439
-# PCS[6:9] = 1.182456140
-# PCS[9:12] = 1.287719298
-# PCS[12:138] = 1.4       # Pre Set
-# PCS[138:166] = 1.322807018
-# PCS[166:200] = 1.238596491
-# PCS[200:241] = 1.161403509
-# PCS[241:256] = 1.077192982
-
-
-# In[6]:
-
-
 with open(NISQA_PATH, 'r') as stream:
     nisqa_args = yaml.safe_load(stream)
 nisqa_args["ms_n_fft"] = N_FFTS
 nisqa_args["hop_length"] = HOP_LENGTH
 nisqa_args["ms_win_length"] = N_FFTS
 nisqa_args["ckp"] = nisqa_args["ckp"][3:]
+nisqa_args["inf_device"] = DEVICE
 
 
-# In[7]:
+# In[6]:
 
 
 nisqa, h0_nisqa, c0_nisqa = model_init(nisqa_args)
 
 
-# In[8]:
+# In[7]:
 
 
 stoi = NegSTOILoss(SR, use_vad=False, do_resample=False).to(DEVICE)
 
 
+# In[8]:
+
+
+snr_dict = {1: [-5, ], 5: [-5, ], 7: [-5, ]}
+rir_dict = {1: os.path.join("data", "test_rir"), 3: os.path.join("data", "test_rir")}
+dataset = TRUNetDataset(DATA_DIR, sr=SR, noise_dir=NOISE_DIR, rir_dir=RIR_DIR, snr=0, rir_proba=1.0, noise_proba=1.0, rir_target=False, return_noise=False, return_rir=False, max_seq_len=SR * 4)
+
+train_dataset, test_dataset = dataset, dataset#  torch.utils.data.random_split(dataset, [0.7, 0.3])
+
+
 # In[9]:
 
 
-# pesq = PerceptualEvaluationSpeechQuality(SR, 'nb') # fs should be 16_000 or less
-# pesq = PesqLoss(1.0,
-#     sample_rate=SR,
-#     n_fft=N_FFTS,
-#     win_length=N_FFTS,
-#     hop_length=HOP_LENGTH,
-# ).to(DEVICE)
+train_dataset, TRUNetDataset(DATA_DIR, sr=SR, noise_dir=os.path.join("data", "test_noise"), rir_dir=os.path.join("data", "test_rir"), snr=5, rir_proba=0.0, noise_proba=1.0, rir_target=False, return_noise=False, return_rir=False, max_seq_len=SR * 5)
+test_dataset = TRUNetDataset(DATA_DIR, sr=SR, noise_dir=os.path.join("data", "test_noise"), rir_dir=os.path.join("data", "test_rir"), snr=5, rir_proba=0.0, noise_proba=1.0, rir_target=False, return_noise=False, return_rir=False, max_seq_len=SR * 5)
 
 
-# In[ ]:
-
-
-# train_dataset = TRUNetDataset(TRAIN_DIR, sr=16_000, noise_dir=NOISE_DIR, rir_dir=RIR_DIR, snr=(0, 20), return_noise=False, return_rir=False)
-# test_dataset = TRUNetDataset(TEST_DIR, sr=16_000, noise_dir=NOISE_DIR, snr=(0, 20), rir_dir=RIR_DIR, return_noise=False, return_rir=False)
-
-# dataset = TRUNetDataset(DATA_DIR, sr=SR, noise_dir=NOISE_DIR, rir_dir=RIR_DIR, snr=[-5, 0, 5, 10], rir_proba=0.7, noise_proba=0.7, return_noise=False, return_rir=False)
-snr_dict = {1: [5, 10], 10: [0, 5, 10], 20: [-5, 0, 5, 10]}
-rir_dict = {1: os.path.join("data", "rirs48_soft_2"), 15: os.path.join("data", "rirs48_medium_2"), 30: os.path.join("data", "rirs48_hard_2")}
-dataset = TRUNetDataset(DATA_DIR, sr=SR, noise_dir=NOISE_DIR, rir_dir=rir_dict, snr=snr_dict, rir_proba=0.9, noise_proba=0.9, rir_target=True, return_noise=False, return_rir=False)
-
-train_dataset, test_dataset = torch.utils.data.random_split(dataset, [0.7, 0.3])
-
-
-# In[11]:
+# In[10]:
 
 
 def vorbis_window(winlen, device="cuda"):
@@ -151,7 +131,7 @@ def vorbis_window(winlen, device="cuda"):
     return sq
 
 
-# In[12]:
+# In[11]:
 
 
 def pad_sequence(batch):
@@ -211,7 +191,7 @@ def collate_fn(batch):
     return input_spec, padded_target, gt_spec
 
 
-# In[13]:
+# In[12]:
 
 
 from tqdm import tqdm
@@ -221,33 +201,59 @@ cores = multiprocessing.cpu_count() # Count the number of cores in a computer
 cores
 
 
+# In[13]:
+
+
+train_dataloader = DataLoader(train_dataset, batch_size=1 * N_DEVICES, shuffle=False, drop_last=False, collate_fn=collate_fn, num_workers=4)
+test_dataloader = DataLoader(test_dataset, batch_size=1 * N_DEVICES, shuffle=False, drop_last=False, collate_fn=collate_fn, num_workers=4)
+
+
 # In[14]:
 
 
-train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE * N_DEVICES, shuffle=True, drop_last=True, collate_fn=collate_fn, num_workers=4)
-test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE * N_DEVICES, shuffle=False, drop_last=False, collate_fn=collate_fn, num_workers=4)
+from torch.utils.tensorboard import SummaryWriter
+
+writer = SummaryWriter()
 
 
 # In[15]:
 
 
-def train(model, train_loader, optimizer, with_noise=True, with_rir=True, device="cuda", epoch=0, draw_every=1):
+def get_grad_norm(model, dict_grad):
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_norm = param.grad.norm().detach().cpu().item()
+            dict_grad[f"grad_norm/{name}"].append(grad_norm)
+            dict_grad[f"grad_max/{name}"].append(param.grad.max().detach().cpu().item())
+        else:
+            dict_grad[f"grad_norm/{name}"].append(None)
+            dict_grad[f"grad_max/{name}"].append(None)
+
+    return dict_grad
+
+def train(model, configs, train_loader, optimizer, with_noise=True, with_rir=True, device="cuda", epoch=0, accumulation_step=1, draw_every=1):
     total_train_loss = 0
     # MOS NOI DISC COL LOUD
     total_train_nisqa = torch.zeros(5)
     total_train_srmr = 0
     total_train_stoi = []
-    # ind = 0
-    out = None
-    noisy_in = None
+
+    dict_grad_norm = {}
+    for name, _ in model.named_parameters():
+        dict_grad_norm[f"grad_norm/{name}"] = list()
+        dict_grad_norm[f"grad_max/{name}"] = list()
+        dict_grad_norm[f"upd_ratio/{name}"] = list()
+
     model.train()
-    count = 0
+
     for input_spec, gt_signal, gt_spec in tqdm(train_loader, desc="Train model "):
         gt_signal = gt_signal.to(device)
+        gt_spec = gt_spec.to(device)
 
-        output, _ = model_eval(model, input_spec, device, hid_size=64)
+        output, _ = model_eval(model, input_spec, configs, device, hid_size=32)
 
         window = vorbis_window(N_FFTS).to(device)
+
         out_wave = torch.istft(output, n_fft=N_FFTS, hop_length=HOP_LENGTH, win_length=N_FFTS,
                                window=window,
                                # onesided=True,
@@ -256,18 +262,24 @@ def train(model, train_loader, optimizer, with_noise=True, with_rir=True, device
                                center=True)#, length=gt_signal.shape[-1])
         
         min_l = min(out_wave.shape[-1], gt_signal.shape[-1])
-        stoi_score = stoi(out_wave[..., :min_l], gt_signal[..., :min_l])# .mean()# .detach().cpu()
-        loss_mr = loss_MR(out_wave[..., :min_l], gt_signal[..., :min_l], nffts=[128, 256, 512, 1024, 2048, 4096])
-        
-        loss = loss_mr # + loss_mr_w
+        stoi_score = -stoi(out_wave[..., :min_l], gt_signal[..., :min_l])# .mean()# .detach().cpu()
+        loss_mr = loss_MR(out_wave[..., :min_l], gt_signal[..., :min_l], nffts=[128, 256, 512, 1024, 2048, 4096], gamma=0.3)
+
+        loss_ip, loss_gd, loss_iaf = phase_losses(gt_spec.angle(), output.angle())
+        loss_pha = loss_ip + loss_gd + loss_iaf
+
+        loss_conv = torch.norm(output - gt_spec) / (torch.norm(gt_spec) + 1e-8)
+
+        loss = loss_mr + loss_conv # + loss_pha * 0.5
         
         loss.backward()
+
         optimizer.step()
         optimizer.zero_grad()
 
         if epoch % 5 == 0:
-            nisqa_score, _, _ = process(out_wave.detach().cpu(), SR, nisqa, h0_nisqa, c0_nisqa, nisqa_args)
-            total_train_nisqa += nisqa_score[0]
+            nisqa_score, _, _ = process(out_wave.detach(), SR, nisqa, h0_nisqa, c0_nisqa, nisqa_args)
+            total_train_nisqa += nisqa_score[0].detach().cpu()
 
         total_train_stoi.append(stoi_score.detach().cpu())
         
@@ -276,13 +288,14 @@ def train(model, train_loader, optimizer, with_noise=True, with_rir=True, device
         assert loss.detach().isnan().any().item() is False, "Train loss is NaN"
         
     return (model, optimizer, total_train_loss / len(train_loader), total_train_nisqa / len(train_loader), 
-            total_train_srmr / len(train_loader), torch.hstack(total_train_stoi).mean().item())
+            total_train_srmr / len(train_loader), torch.hstack(total_train_stoi).mean().item(), dict_grad_norm)
             
-def evaluate(model, test_loader, with_noise=True, with_rir=True, device="cuda", epoch=0):
+def evaluate(model, configs, test_loader, with_noise=True, with_rir=True, device="cuda", epoch=0, accumulation_step=1):
     total_test_loss = 0
     total_test_nisqa = torch.zeros(5)
     total_test_srmr = 0
     total_test_stoi = []
+    
     model.eval()
 
     last_out = None
@@ -291,8 +304,9 @@ def evaluate(model, test_loader, with_noise=True, with_rir=True, device="cuda", 
     with torch.no_grad():
         for input_spec, gt_signal, gt_spec in tqdm(test_loader, desc="Test model "):
             gt_signal = gt_signal.to(device)
-            
-            output, _ = model_eval(model, input_spec, device, hid_size=64)
+            gt_spec = gt_spec.to(device)
+
+            output, _ = model_eval(model, input_spec, configs, device, hid_size=32)
 
             window = vorbis_window(N_FFTS).to(device)
             out_wave = torch.istft(output, n_fft=N_FFTS, hop_length=HOP_LENGTH, win_length=N_FFTS,
@@ -302,15 +316,23 @@ def evaluate(model, test_loader, with_noise=True, with_rir=True, device="cuda", 
                                    center=True)
 
             min_l = min(out_wave.shape[-1], gt_signal.shape[-1])
-            stoi_score = stoi(out_wave[..., :min_l], gt_signal[..., :min_l])# .mean()# .detach().cpu()    
-            loss_mr = loss_MR(out_wave[..., :min_l], gt_signal[..., :min_l], nffts=[128, 256, 512, 1024, 2048, 4096])        
-            loss = loss_mr # + loss_mr_w # + mask_loss_abs + mask_loss_angle
+            stoi_score = -stoi(out_wave[..., :min_l], gt_signal[..., :min_l])# .mean()# .detach().cpu()    
+            loss_mr = loss_MR(out_wave[..., :min_l], gt_signal[..., :min_l], nffts=[128, 256, 512, 1024, 2048, 4096], gamma=0.3)    
+
+            loss_ip, loss_gd, loss_iaf = phase_losses(gt_spec.angle(), output.angle())
+            loss_pha = loss_ip + loss_gd + loss_iaf
+
+            loss_conv = torch.norm(output - gt_spec) / (torch.norm(gt_spec) + 1e-8)
+
+            loss = loss_mr + loss_conv # + loss_pha * 0.5
+
+            if epoch % 5 == 0:
+                nisqa_score, _, _ = process(out_wave.detach(), SR, nisqa, h0_nisqa, c0_nisqa, nisqa_args)
+                total_test_nisqa += nisqa_score[0].detach().cpu()
 
             total_test_stoi.append(stoi_score.detach().cpu())
+
             total_test_loss += loss.detach().cpu().item()
-            if epoch % 5 == 0:
-                nisqa_score, _, _ = process(out_wave.detach().cpu(), SR, nisqa, h0_nisqa, c0_nisqa, nisqa_args)
-                total_test_nisqa += nisqa_score[0]
 
             last_out = out_wave
             input_spec = input_spec.to(device)
@@ -331,7 +353,7 @@ def evaluate(model, test_loader, with_noise=True, with_rir=True, device="cuda", 
     
 
 
-# In[ ]:
+# In[16]:
 
 
 from IPython.display import clear_output
@@ -362,12 +384,14 @@ def get_lr(optimizer):
 
 def learning_loop(
     model,
+    configs,
     optimizer,
     train_loader,
     val_loader,
     scheduler=None,
     min_lr=None,
     epochs=10,
+    accumulation_step=1,
     val_every=1,
     draw_every=1,
     with_noise=True,
@@ -391,19 +415,20 @@ def learning_loop(
             'val SRMR': [],
             'val STOI': [],
             "learning rate": [],
+            "weights_stat": [],
         }
 
     max_mos = 0
 
     for epoch in np.arange(1, epochs+1) + starting_epoch:
         print(f'#{epoch}/{epochs}:')
-        train_dataset.dataset.set_epoch(epoch)
+        train_dataset.set_epoch(epoch)
         # print(train_dataset.dataset.snr)
         # print(len(train_dataset.dataset.rir_files))
-        test_dataset.dataset.set_epoch(epoch)
+        test_dataset.set_epoch(epoch)
         plots['learning rate'].append(get_lr(optimizer))
         
-        (model, optimizer, train_loss, train_nisqa, train_srmr, train_stoi) = train(model, train_loader, optimizer, with_noise=with_noise, with_rir=with_rir, device=device, epoch=epoch - 1, draw_every=draw_every)
+        (model, optimizer, train_loss, train_nisqa, train_srmr, train_stoi, weights_stat) = train(model, configs, train_loader, optimizer, with_noise=with_noise, with_rir=with_rir, device=device, epoch=epoch - 1, accumulation_step=accumulation_step, draw_every=draw_every)
         # print(train_nisqa)
         plots['train loss'].append(train_loss)
         if (epoch - 1) % 5 == 0:
@@ -412,10 +437,15 @@ def learning_loop(
             plots['train NISQA'].append(plots['train NISQA'][-1])
         plots['train SRMR'].append(train_srmr)
         plots['train STOI'].append(train_stoi)
+        plots["weights_stat"].append(weights_stat)
+
+        # print(weights_stat)
+        # for name, value in weights_stat.items():
+        #     writer.add_scalar(name, sum(value) / len(value), epoch)
 
         if not (epoch % val_every):
             # print("validate")
-            (val_loss, val_nisqa, val_srmr, val_stoi) = evaluate(model, val_loader, with_noise=with_noise, with_rir=with_rir, epoch=epoch-1, device=device)
+            (val_loss, val_nisqa, val_srmr, val_stoi) = evaluate(model, configs, val_loader, with_noise=with_noise, with_rir=with_rir, epoch=epoch-1, accumulation_step=accumulation_step, device=device)
             plots['val loss'].append(val_loss)
             if (epoch - 1) % 5 == 0:
                 plots['val NISQA'].append(val_nisqa[None, :].cpu())
@@ -424,29 +454,29 @@ def learning_loop(
             plots['val SRMR'].append(val_srmr)
             plots['val STOI'].append(val_stoi)
             
-            # Сохраняем модель
-            if not os.path.exists(chkp_folder):
-                os.makedirs(chkp_folder)
-            
-            # if max_mos <= val_nisqa[0]:
-            torch.save(
-                {
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'plots': plots,
-                },
-                os.path.join(chkp_folder, model_name + '.pt'),
-            )
-            max_mos = val_nisqa[0]
-            
-            # Шедулинг
-            if scheduler:
-                try:
-                    scheduler.step()
-                except:
-                    scheduler.step(metrics=val_loss)
+        # Сохраняем модель
+        if not os.path.exists(chkp_folder):
+            os.makedirs(chkp_folder)
+        
+        # if max_mos <= val_nisqa[0]:
+        torch.save(
+            {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'plots': plots,
+            },
+            os.path.join(chkp_folder, model_name + '.pt'),
+        )
+        # max_mos = val_nisqa[0]
+        
+        # Шедулинг
+        if scheduler:
+            try:
+                scheduler.step()
+            except:
+                scheduler.step(metrics=val_loss)
 
         if not (epoch % draw_every):
             clear_output(True)
@@ -518,32 +548,32 @@ def learning_loop(
             plt_ind += 1
 
             plt.show()
-            display(fig)
+            # display(fig)
                         
-        if min_lr and get_lr(optimizer) <= min_lr:
-            print(f'Learning process ended with early stop after epoch {epoch}')
-            break
+        # if min_lr and get_lr(optimizer) <= min_lr:
+        #     print(f'Learning process ended with early stop after epoch {epoch}')
+        #     break
 
-    
+    writer.close()
     return model, optimizer, plots
 
 
-# In[21]:
+# In[17]:
 
 
 from torch.optim import Adam, AdamW
-from src.fspen_configs import TrainConfig, TrainConfig48kHzEnc, TrainConfig48kHzEnc2x, TrainConfig48kHzEnc2x_ver1, TrainConfig48kHzEnc2x_ver2, TrainConfig48kHzEnc2x_ver3
-configs = TrainConfig48kHzEnc2x_ver2()
-print(sum(configs.bands_num_in_groups), configs.dual_path_extension["num_modules"])
+from src.fspen_configs import TrainConfig48kHzEnc2x_ver2, TrainConfig48kHzEnc2x_enc_ext, TrainConfig48kHzEnc2x_ver2_sub, TrainConfig48kHzEnc2x_ver2_full, TrainConfig
+configs = TrainConfig()
+# print(sum(configs.bands_num_in_groups), configs.dual_path_extension["num_modules"])
 fspen = FullSubPathExtension(configs=configs).to(DEVICE) # TRUNet(nfft=N_FFTS, hop=HOP_LENGTH).cuda()
 
-optimizer = AdamW(fspen.parameters(), lr=5e-3)
+optimizer = AdamW(fspen.parameters(), lr=5e-2, weight_decay=1e-5)
 # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-5)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 8, gamma=0.8, last_epoch=-1)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 50, gamma=0.1, last_epoch=-1)
 # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, cooldown=1, patience=3, threshold=0.1, mode="min", threshold_mode="abs")
 
 
-# In[22]:
+# In[18]:
 
 
 from src.utils import model_num_params
@@ -551,10 +581,31 @@ from src.utils import model_num_params
 _, _ = model_num_params(fspen)
 
 
+# In[19]:
+
+
+fspen, optimizer, plots = learning_loop(fspen, configs, optimizer, train_dataloader, test_dataloader, scheduler, draw_every=1, epochs=50, accumulation_step=1, min_lr=1e-8, with_noise=False, with_rir=False, model_name="TrainConfig_OG")
+
+
 # In[ ]:
 
 
-fspen, optimizer, plots = learning_loop(fspen, optimizer, train_dataloader, test_dataloader, scheduler, draw_every=1, epochs=60, min_lr=1e-8, with_noise=False, with_rir=False, model_name="TrainConfig48kHzEnc2x_ver2_hard")
+import pandas as pd
+
+df = pd.DataFrame(plots['weights_stat'][1])
+df.head()
+
+
+# In[ ]:
+
+
+df.loc[:, [col for col in df.columns if ("dual" in col) and ("upd" in col)]].mean(axis=1).head(10)
+
+
+# In[ ]:
+
+
+plots["weights_stat"][0]
 
 
 # In[ ]:

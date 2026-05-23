@@ -45,13 +45,17 @@ import warnings
 # torch.set_printoptions(precision=3)
 # TRAIN_CLEAN_DATA_DIR = "/opt/software/datasets/urgent26_track2_se_dataset/simulation_train/clean/"  # os.path.join("data", "wav48")
 # TRAIN_NOISY_DATA_DIR = "/opt/software/datasets/urgent26_track2_se_dataset/simulation_train/noisy/"
-DATA_DIR = os.path.join("data", "DS_10283_2791/clean_trainset_28spk_wav")
-
+DATA_DIR = os.path.join("data", "DS_10283_2791/clean_trainset_56spk_wav/")
+# DATA_DIR = "/opt/software/datasets/dns_challenge_v4/datasets_fullband/clean_fullband/"
+# DATA_DIR = "/opt/software/datasets/urgent26_track2_se_dataset/simulation_train/clean/"
+# DATA_DIR = "data/universe-validation_set-100/" # "~/opt/software/datasets/urgent26_track2_se_dataset/simulation_train/clean/"
 # TEST_CLEAN_DATA_DIR = "/opt/software/datasets/urgent26_track2_se_dataset/simulation_validation/clean/"
 # TEST_NOISY_DATA_DIR = "/opt/software/datasets/urgent26_track2_se_dataset/simulation_validation/noisy/"
 
 NOISE_DIR_TRAIN = os.path.join("data", "demand_train")
-NOISE_DIR_TEST = os.path.join("data", "demand_test")
+# NOISE_DIR_TRAIN = os.path.join("data", "~/s3_ml_data/zdkondaurov/datasets_fullband/noise_fullband")
+# NOISE_DIR_TRAIN = "/opt/software/datasets/dns_challenge_v4/datasets_fullband/noise_fullband/"
+NOISE_DIR_TEST = os.path.join("data", "demand_val")
 
 CHKP_DIR = "checkpoints"
 
@@ -80,7 +84,7 @@ from src.fspen_configs import * #TrainConfig, TrainConfig_48khz, TrainConfig_48k
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 configs = TrainConfig_explicit_unfold()
 fspen = FullSubPathExtension_ver3_unfold(configs=configs).to(DEVICE)
-model_name = "TrainConfig_explicit_unfold_sigmoid_hse"
+model_name = "TrainConfig_explicit_unfold_sigmoid_charisma"
 # configs = TrainConfig_48khz()
 # fspen = FullSubPathExtension_abs_pha(configs=configs).to(DEVICE)
 
@@ -94,7 +98,7 @@ scheduler = create_warmup_cosine_scheduler(optimizer, warmup_epochs=6, total_epo
 # print(configs.widths)
 
 
-# In[ ]:
+# In[6]:
 
 
 # N_FFTS = 512
@@ -138,13 +142,15 @@ pesq = PerceptualEvaluationSpeechQuality(fs=16_000, mode="wb").to(DEVICE)
 stoi = NegSTOILoss(SR, use_vad=False, do_resample=False).to(DEVICE)
 
 
-# In[10]:
+# In[12]:
 
 
-rir_dict_train = {1: os.path.join("data", "rirs48_small_2_train"), 1: os.path.join("data", "rirs48_medium_2_train")}
-rir_dict_test = {1: os.path.join("data", "rirs48_small_2_test"), 1: os.path.join("data", "rirs48_medium_2_test")}
+# rir_dict_train = {1: "~/s3_ml_data/zdkondaurov/datasets_fullband/impulse_responses"}# os.path.join("data", "rirs48_small_2_train"), 1: os.path.join("data", "rirs48_medium_2_train")}
+rir_dict_train = {1: os.path.join("data", "rirs48_small_3_train"), 1: os.path.join("data", "rirs48_medium_3_train"), 1: os.path.join("data", "rirs48_large_3_train"), 1: os.path.join("data", "rirs48_super_large_3_train")}
+# rir_dict_train = {1: "/opt/software/datasets/dns_challenge_v4/datasets_fullband/impulse_responses/"}
+rir_dict_test = {1: os.path.join("data", "rirs48_small_3_val"), 1: os.path.join("data", "rirs48_medium_3_val"), 1: os.path.join("data", "rirs48_large_3_val"), 1: os.path.join("data", "rirs48_super_large_3_val")}
 train_dataset = TRUNetDataset(DATA_DIR, sr=SR, noise_dir=NOISE_DIR_TRAIN, rir_dir=rir_dict_train, snr=[0, 5, 10, 15], rir_proba=1.0, noise_proba=1.0, rir_target=False, return_noise=False, return_rir=False, max_seq_len=SR * 4)
-test_dataset = TRUNetDataset("data/DS_10283_2791/clean_testset_wav", sr=SR, noise_dir=NOISE_DIR_TEST, rir_dir=rir_dict_test, snr=[0, 5, 10, 15], rir_proba=1.0, noise_proba=1.0, rir_target=False, return_noise=False, return_rir=False, max_seq_len=SR * 4)
+test_dataset = TRUNetDataset("data/DS_10283_2791/clean_trainset_28spk_wav/", sr=SR, noise_dir=NOISE_DIR_TEST, rir_dir=rir_dict_test, snr=[0, 5, 10, 15], rir_proba=1.0, noise_proba=1.0, rir_target=False, return_noise=False, return_rir=False, max_seq_len=SR * 4)
 
 train_dataset.set_epoch(1)
 test_dataset.set_epoch(1)
@@ -152,10 +158,10 @@ test_dataset.set_epoch(1)
 # test_dataset = VoiceBankDataset(TEST_NOISY_DATA_DIR, TEST_CLEAN_DATA_DIR, sr=SR, max_seq_len=SR * 4)
 
 
-# In[11]:
+# In[13]:
 
 
-len(train_dataset), len(test_dataset)
+print(len(train_dataset), len(test_dataset))
 
 
 # In[12]:
@@ -189,11 +195,13 @@ def pad_sequence(batch):
 def collate_fn(batch):
     
     padded_input, padded_target = pad_sequence(batch)
+
+    assert torch.isnan(padded_input).any().item() is False, "waveform has NaNs"
     
     # padded_input = padded_input.unfold(-1, 16_000 * 2, 16_000)
     # padded_target = padded_target.unfold(-1, 16_000 * 2, 16_000)
     
-    window = vorbis_window(N_FFTS)
+    window = vorbis_window(N_FFTS) # torch.hann_window(N_FFTS) # vorbis_window(N_FFTS)
     
     padded_input = padded_input.reshape(-1, padded_input.shape[-1])
     input_spec = torch.stft(
@@ -291,6 +299,11 @@ def train(model, configs, train_loader, optimizer, with_noise=True, with_rir=Tru
     for input_spec, gt_signal, input_signal in tqdm(train_loader, desc="Train model "):
         # if start_step is not None:
         #     print("Build batch:", time.time() - start_step)
+        mask = torch.isnan(input_spec).any(dim=(1, 2))
+        input_spec = input_spec[~mask]
+        gt_signal = gt_signal[~mask]
+        input_signal = input_signal[~mask]
+
         input_spec = input_spec.to(device)
         gt_signal = gt_signal.to(device)
         input_signal = input_signal.to(device)
@@ -299,7 +312,7 @@ def train(model, configs, train_loader, optimizer, with_noise=True, with_rir=Tru
         output, _ = model_eval(model, input_spec, configs, device, hid_size=64)
         # print("Model inference:", time.time() - start)
 
-        window = vorbis_window(N_FFTS).to(device)
+        window = vorbis_window(N_FFTS).to(device) # torch.hamming_window(N_FFTS).to(device) # vorbis_window(N_FFTS).to(device)
 
         out_wave = torch.istft(output, n_fft=N_FFTS, hop_length=HOP_LENGTH, win_length=N_FFTS,
                                window=window,
@@ -386,13 +399,18 @@ def evaluate(model, configs, test_loader, with_noise=True, with_rir=True, device
 
     with torch.no_grad():
         for input_spec, gt_signal, input_signal in tqdm(test_loader, desc="Test model "):
+            mask = torch.isnan(input_spec).any(dim=(1, 2))
+            input_spec = input_spec[~mask]
+            gt_signal = gt_signal[~mask]
+            input_signal = input_signal[~mask]
+
             input_spec = input_spec.to(device)
             gt_signal = gt_signal.to(device)
             input_signal = input_signal.to(device)
 
             output, _ = model_eval(model, input_spec, configs, device, hid_size=64)
 
-            window = vorbis_window(N_FFTS).to(device)
+            window = vorbis_window(N_FFTS).to(device) # torch.hann_window(N_FFTS).to(device) # vorbis_window(N_FFTS).to(device)
             out_wave = torch.istft(output, n_fft=N_FFTS, hop_length=HOP_LENGTH, win_length=N_FFTS,
                                    window=window,
                                    return_complex=False,

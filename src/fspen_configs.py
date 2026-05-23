@@ -897,6 +897,7 @@ class TrainConfig_baseline(BaseModel):
     merge_split: dict = {"channels": 64, "bands": 32, "compress_rate": 2}
     bands_num_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[0]
     band_width_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[1]
+    # print(band_width_in_groups)
 
     sub_band_decoder: Dict[str, dict] = {f"decoder{idx}": {"in_features": 64, "out_features": width}
                                          for idx, width in enumerate(band_width_in_groups)}
@@ -915,65 +916,6 @@ class TrainConfig_baseline(BaseModel):
             if decoder["out_feature"] < 2:
                 raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
             
-            
-class TrainConfig_48khz(BaseModel):
-    sample_rate: int = 48000
-    n_fft: int = 1024
-    hop_length: int = 512
-    train_frames: int = 62
-    train_points: int = (train_frames - 1) * hop_length
-
-    full_band_encoder: Dict[str, dict] = {
-        "encoder1": {"in_channels": 2, "out_channels": 4, "kernel_size": 6, "stride": 2, "padding": 2},
-        "encoder2": {"in_channels": 4, "out_channels": 16, "kernel_size": 8, "stride": 2, "padding": 3},
-        "encoder3": {"in_channels": 16, "out_channels": 32, "kernel_size": 6, "stride": 2, "padding": 2}
-    }
-    full_band_decoder: Dict[str, dict] = {
-        "decoder1": {"in_channels": 64, "out_channels": 16, "kernel_size": 6, "stride": 2, "padding": 2},
-        "decoder2": {"in_channels": 32, "out_channels": 4, "kernel_size": 8, "stride": 2, "padding": 3},
-        "decoder3": {"in_channels": 8, "out_channels": 2, "kernel_size": 6, "stride": 2, "padding": 2}
-    }
-
-    sub_band_encoder: Dict[str, dict] = {
-        "encoder1": {"group_width": 18, "conv": {"start_frequency": 0, "end_frequency": 18, "in_channels": 1,
-                                                 "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}}, # 8
-        "encoder2": {"group_width": 18, "conv": {"start_frequency": 18, "end_frequency": 36, "in_channels": 1,
-                                                 "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}}, # 8
-        "encoder3": {"group_width": 48, "conv": {"start_frequency": 36, "end_frequency": 84, "in_channels": 1,
-                                                 "out_channels": 32, "kernel_size": 13, "stride": 6, "padding": 0}}, # 6
-        "encoder4": {"group_width": 48, "conv": {"start_frequency": 84, "end_frequency": 132, "in_channels": 1,
-                                                 "out_channels": 32, "kernel_size": 13, "stride": 6, "padding": 0}}, # 6
-        "encoder5": {"group_width": 66, "conv": {"start_frequency": 132, "end_frequency": 198, "in_channels": 1,
-                                                  "out_channels": 32, "kernel_size": 16, "stride": 9, "padding": 0}}, # 6
-        "encoder6": {"group_width": 66, "conv": {"start_frequency": 198, "end_frequency": 264, "in_channels": 1,
-                                                  "out_channels": 32, "kernel_size": 16, "stride": 9, "padding": 0}}, # 6
-        "encoder7": {"group_width": 120, "conv": {"start_frequency": 264, "end_frequency": 384, "in_channels": 1,
-                                                  "out_channels": 32, "kernel_size": 16, "stride": 9, "padding": 0}}, # 6
-        "encoder8": {"group_width": 129, "conv": {"start_frequency": 384, "end_frequency": 513, "in_channels": 1,
-                                                  "out_channels": 32, "kernel_size": 20, "stride": 7, "padding": 0}}, # 6
-    }
-    merge_split: dict = {"channels": 128, "bands": 32, "compress_rate": 2}
-
-    num_bands_out: int = 64
-
-    bands_num_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[0]
-    band_width_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[1]
-
-    sub_band_decoder: Dict[str, dict] = {f"decoder{idx}": {"in_features": 64, "out_features": width}
-                                         for idx, width in enumerate(band_width_in_groups)}
-
-    dual_path_extension: dict = {
-        "num_modules": 3,
-        "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
-                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
-    }
-
-    @field_validator("sub_band_decoder")
-    def sub_band_decoder_validate(cls, decoders):
-        for decoder in decoders:
-            if decoder["out_feature"] < 2:
-                raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
-            
 
 class TrainConfig_48khz(BaseModel):
     sample_rate: int = 48000
@@ -981,6 +923,7 @@ class TrainConfig_48khz(BaseModel):
     hop_length: int = 512
     train_frames: int = 62
     train_points: int = (train_frames - 1) * hop_length
+    batch_size: int = 32
 
     full_band_encoder: Dict[str, dict] = {
         "encoder1": {"in_channels": 2, "out_channels": 4, "kernel_size": 6, "stride": 2, "padding": 2},
@@ -1020,7 +963,7 @@ class TrainConfig_48khz(BaseModel):
 
     sub_band_decoder: Dict[str, dict] = {f"decoder{idx}": {"in_features": 64, "out_features": width}
                                          for idx, width in enumerate(band_width_in_groups)}
-
+    # print(band_width_in_groups)
     dual_path_extension: dict = {
         "num_modules": 3,
         "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
@@ -1032,6 +975,123 @@ class TrainConfig_48khz(BaseModel):
         for decoder in decoders:
             if decoder["out_feature"] < 2:
                 raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
+
+
+class TrainConfig_48kHz_overlap(BaseModel):
+    sample_rate: int = 48_000
+    n_fft: int = 1024
+    hop_length: int = 512
+    train_frames: int = 62
+    train_points: int = (train_frames - 1) * hop_length
+    
+    overlap: bool = False
+
+    full_band_encoder: Dict[str, dict] = {
+        "encoder1": {"in_channels": 2, "out_channels": 4, "kernel_size": 6, "stride": 2, "padding": 2},
+        "encoder2": {"in_channels": 4, "out_channels": 16, "kernel_size": 8, "stride": 2, "padding": 3},
+        "encoder3": {"in_channels": 16, "out_channels": 32, "kernel_size": 6, "stride": 2, "padding": 2},
+        # "encoder4": {"in_channels": 16, "out_channels": 32, "kernel_size": 8, "stride": 2, "padding": 2}
+    }
+    full_band_decoder: Dict[str, dict] = {
+        "decoder1": {"in_channels": 64, "out_channels": 16, "kernel_size": 6, "stride": 2, "padding": 2},
+        "decoder2": {"in_channels": 32, "out_channels": 4, "kernel_size": 8, "stride": 2, "padding": 3},
+        "decoder3": {"in_channels": 8, "out_channels": 2, "kernel_size": 6, "stride": 2, "padding": 2}
+    }
+
+    sub_band_encoder: Dict[str, dict] = {
+        "encoder1": {"group_width": 18, "old_group_width": 18, "conv": {"start_frequency": 0, "end_frequency": 18,
+            "in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}}, # 6
+
+        "encoder2": {"group_width": 27, "old_group_width": 18, "conv": {"start_frequency": 9, "end_frequency": 36, 
+            "in_channels": 1, "out_channels": 32, "kernel_size": 9, "stride": 4, "padding": 1}}, # 6
+
+        "encoder3": {"group_width": 57, "old_group_width": 48,
+                     "conv": {"start_frequency": 27, "end_frequency": 84, "in_channels": 1, "out_channels": 32, "kernel_size": 14, "stride": 9, "padding": 1}}, # 6
+
+        "encoder4": {"group_width": 72, "old_group_width": 48,
+                     "conv": {"start_frequency": 60, "end_frequency": 132, "in_channels": 1, "out_channels": 32, "kernel_size": 19, "stride": 11, "padding": 1}}, # 6
+
+        "encoder5": {"group_width": 90, "old_group_width": 66, 
+                     "conv": {"start_frequency": 108, "end_frequency": 198, "in_channels": 1, "out_channels": 32, "kernel_size": 32, "stride": 12, "padding": 1}}, # 6
+
+        "encoder6": {"group_width": 99, "old_group_width": 66,
+                      "conv": {"start_frequency": 165, "end_frequency": 264,
+                                "in_channels": 1, "out_channels": 32, "kernel_size": 36, "stride": 13, "padding": 1}}, # 6
+
+        "encoder7": {"group_width": 153, "old_group_width": 120,
+                      "conv": {"start_frequency": 231, "end_frequency": 384,
+                                "in_channels": 1, "out_channels": 32, "kernel_size": 23, "stride": 12, "padding": 1}}, # 12
+
+        "encoder8": {"group_width": 189, "old_group_width": 129,
+                      "conv": {"start_frequency": 324, "end_frequency": 513,
+                                "in_channels": 1, "out_channels": 32, "kernel_size": 20, "stride": 11, "padding": 1}} # 16
+    }
+
+    dummy_params: Dict[str, dict] = {
+        "encoder1": {"group_width": 18, "bounds": {"start_frequency": 0, "end_frequency": 18}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}]}, # 6
+
+        "encoder2": {"group_width": 18, "bounds": {"start_frequency": 18, "end_frequency": 36}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 3, "padding": 1}]}, # 6
+
+        "encoder3": {"group_width": 48, "bounds": {"start_frequency": 36, "end_frequency": 84}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 13, "stride": 7, "padding": 0}]}, # 6
+
+        "encoder4": {"group_width": 48, "bounds": {"start_frequency": 84, "end_frequency": 132},  "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 13, "stride": 7, "padding": 0}]}, # 6
+
+        "encoder5": {"group_width": 66, "bounds": {"start_frequency": 132, "end_frequency": 198}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 16, "stride": 10, "padding": 0}]}, # 6
+
+        "encoder6": {"group_width": 66, "bounds": {"start_frequency": 198, "end_frequency": 264}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 16, "stride": 10, "padding": 0}]}, # 6
+
+        "encoder7": {"group_width": 120, "bounds": {"start_frequency": 264, "end_frequency": 384}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 14, "stride": 10, "padding": 2}]}, # 12
+
+        "encoder8": {"group_width": 129, "bounds": {"start_frequency": 384, "end_frequency": 513}, "convs": [
+            {"in_channels": 1, "out_channels": 32, "kernel_size": 23, "stride": 7, "padding": 0}]}, # 16
+    }
+
+    bands_num_in_groups: Tuple[int] = get_sub_bands(sub_band_encoder)[0]
+    band_width_in_groups: Tuple[int] = [3, 3, 8, 8, 11, 11, 10, 8] # get_sub_bands(dummy_params)[1]
+
+    sub_band_decoder: Dict[str, dict] = {f"decoder{idx}": {"in_features": 64, "out_features": width}
+                                         for idx, width in enumerate(band_width_in_groups)}
+    
+    # sub_band_decoder: Dict[str, dict] = {
+    #     'decoder1': {'start_idx': 0, 'end_idx': 6, 'width': 6, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 5, 'stride': 3, 'padding': 1}}, 
+    #     'decoder2': {'start_idx': 0, 'end_idx': 6, 'width': 6, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 5, 'stride': 3, 'padding': 1}}, 
+    #     'decoder3': {'start_idx': 0, 'end_idx': 6, 'width': 6, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 13, 'stride': 7, 'padding': 0}}, 
+    #     'decoder4': {'start_idx': 0, 'end_idx': 6, 'width': 6, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 13, 'stride': 7, 'padding': 0}}, 
+    #     'decoder5': {'start_idx': 0, 'end_idx': 6, 'width': 6, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 16, 'stride': 10, 'padding': 0}}, 
+    #     'decoder6': {'start_idx': 0, 'end_idx': 6, 'width': 6, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 16, 'stride': 10, 'padding': 0}}, 
+    #     'decoder7': {'start_idx': 0, 'end_idx': 12, 'width': 12, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 14, 'stride': 10, 'padding': 2}}, 
+    #     'decoder8': {'start_idx': 0, 'end_idx': 16, 'width': 16, 
+    #                  'conv': {'in_channels': 64, 'out_channels': 1, 'kernel_size': 23, 'stride': 7, 'padding': 0}}}
+
+    merge_split: dict = {"channels": 128, "bands": 32, "compress_rate": 2}
+
+    num_bands_out: int = 64
+
+    dual_path_extension: dict = {
+        "num_modules": 3,
+        "parameters": {"input_size": 16, "intra_hidden_size": 16, "inter_hidden_size": 16,
+                       "groups": 8, "rnn_type": "GRU", "num_layers": 1}
+    }
+
+    # @field_validator("sub_band_decoder")
+    # def sub_band_decoder_validate(cls, decoders):
+    #     for decoder in decoders:
+    #         if decoder["out_feature"] < 2:
+    #             raise ValueError(f"values should > 2, but got {decoder['out_feature']}")
 
 
 class TrainConfig_48kHz_enc_ext_lay_1(BaseModel):
@@ -1248,6 +1308,7 @@ class TrainConfig_48kHz_enc_ext_lay_1_overlap(BaseModel):
     overlap: bool = True
 
     sub_band_decoder: Dict[str, dict] = build_sub_band_decoder_params(dummy_params, [6, 6, 6, 6, 6, 6, 12, 16])
+    # print(sub_band_decoder)
 
     merge_split: dict = {"channels": 128, "bands": 32, "compress_rate": 2}
 

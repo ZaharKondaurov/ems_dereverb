@@ -297,7 +297,8 @@ class SignalDataset(ABC, Dataset):
 
             target_signal = target_signal[..., start:start + self.max_seq_len]
 
-        if self.rir_dir is not None and uniform(0, 1) < self.rir_proba:
+        rir_p = uniform(0, 1)
+        if self.rir_dir is not None and rir_p < self.rir_proba:
             filename_rir = choice(self.rir_files)
             rir, rir_sr = torchaudio.load(filename_rir)
             if rir.shape[0] > 1:
@@ -338,7 +339,8 @@ class SignalDataset(ABC, Dataset):
         else:
             rir_signal = target_signal
 
-        if self.noise_dir is not None and uniform(0, 1) < self.noise_proba:
+        noise_p = uniform(0, 1)
+        if self.noise_dir is not None and noise_p < self.noise_proba:
             filename_noise = choice(self.noise_files)
             # start = time()
             noise, noise_sr = torchaudio.load(filename_noise)
@@ -376,14 +378,19 @@ class SignalDataset(ABC, Dataset):
 
         if self.verbose:
             to_print = [filename]
-            if self.rir_dir is not None:
+            if self.rir_dir is not None and rir_p < self.rir_proba:
                 df = pd.read_csv(os.path.join(os.path.dirname(filename_rir), "meta.csv"))
                 df["filepath"] = df["filepath"].apply(lambda x: x.split("/")[-1])
                 # print(df["filepath"])
                 result = df[df["filepath"] == filename_rir.split("/")[-1]]
                 to_print.extend([filename_rir, result["rt60"].iloc[0]])
-            if self.noise_dir is not None:
+            if self.rir_dir is not None and rir_p >= self.rir_proba:
+                to_print.extend(["no_file", 0.0])
+            
+            if self.noise_dir is not None and noise_p < self.noise_proba:
                 to_print.extend([filename_noise, snr_db])
+            elif self.noise_dir is not None and noise_p >= self.noise_proba:
+                to_print.extend(["no_file", -100])
             # print(filename, filename_rir, result["rt60"].iloc[0])
             print(*to_print)
         

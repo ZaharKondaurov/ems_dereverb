@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torchmetrics.audio.pesq import PerceptualEvaluationSpeechQuality
 from models.fspen import FullSubPathExtension, DiscriminatorModel
 from src.fspen_configs import TrainConfig
-from src.utils import use_pcs
+from src.utils import use_pcs, vorbis_window
 
 
 def _compute_mr(Y: torch.Tensor, Y_abs: torch.Tensor, S: torch.Tensor, S_abs: torch.Tensor) -> torch.Tensor:
@@ -19,6 +19,28 @@ def anti_wrapping_function(x):
 
 def loss_clipping_penalty(input: torch.Tensor, tau: float = 0.99, p: int = 1):
     return torch.mean(F.relu(input.abs() - tau) ** p)
+
+
+def hybrid_loss(pred_stft, true_stft, n_fft):
+    pred_stft_real, pred_stft_imag = pred_stft[:,:,:,0], pred_stft[:,:,:,1]
+    true_stft_real, true_stft_imag = true_stft[:,:,:,0], true_stft[:,:,:,1]
+    pred_mag = torch.sqrt(pred_stft_real**2 + pred_stft_imag**2 + 1e-12)
+    true_mag = torch.sqrt(true_stft_real**2 + true_stft_imag**2 + 1e-12)
+    pred_real_c = pred_stft_real / (pred_mag**(0.7))
+    pred_imag_c = pred_stft_imag / (pred_mag**(0.7))
+    true_real_c = true_stft_real / (true_mag**(0.7))
+    true_imag_c = true_stft_imag / (true_mag**(0.7))
+    real_loss = nn.MSELoss()(pred_real_c, true_real_c)
+    imag_loss = nn.MSELoss()(pred_imag_c, true_imag_c)
+    mag_loss = nn.MSELoss()(pred_mag**(0.3), true_mag**(0.3))
+    
+    y_pred = torch.istft(pred_stft_real+1j*pred_stft_imag, n_fft, n_fft // 2, n_fft, window=vorbis_window(n_fft).to(pred_stft.device))
+    y_true = torch.istft(true_stft_real+1j*true_stft_imag, n_fft, n_fft // 2, n_fft, window=vorbis_window(n_fft).to(pred_stft.device))
+    y_true = torch.sum(y_true * y_pred, dim=-1, keepdim=True) * y_true / (torch.sum(torch.square(y_true),dim=-1,keepdim=True) + 1e-8)
+
+    sisnr =  - torch.log10(torch.norm(y_true, dim=-1, keepdim=True)**2 / (torch.norm(y_pred - y_true, dim=-1, keepdim=True)**2+1e-8) + 1e-8).mean()
+
+    return 30*(real_loss + imag_loss) + 70*mag_loss + sisnr
 
 def loss_compressed_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False, lambd=0.3) -> torch.Tensor:
     if nffts is None:
@@ -56,6 +78,54 @@ def loss_compressed_MR(input: torch.Tensor, target: torch.Tensor, gamma: float =
         loss += (1 - lambd) * torch.mean((Y_abs - S_abs).abs() ** 2) + lambd * torch.mean(torch.abs(Y_abs * (Y / (torch.abs(Y) + 1e-9)) - S_abs * (S / (torch.abs(S) + 1e-9))) ** 2)
 
     return (loss / len(nffts)).mean()
+
+
+def loss_MR_half(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
+    if nffts is None:
+        nffts = [1024, 512, 256]
+    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
+    loss = torch.zeros((), device=input.device, dtype=input.dtype)
+    for nfft in nffts:
+        Y = torch.stft(
+            input,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=input.device),
+            normalized=True,
+            return_complex=True,
+        )
+        S = torch.stft(
+            target,
+            n_fft=nfft,
+            hop_length=int(nfft * hop_fr),
+            window=torch.hann_window(nfft, device=target.device),
+            normalized=True,
+            return_complex=True,
+        )
+
+        if not pcs:
+            Y = use_pcs(Y, nfft)
+            
+        Y_abs = Y.abs()
+        S_abs = S.abs()
+        # Try loss for angle
+        # Y_angle = Y.angle()
+        # S_angle = S.angle()
+        if (gamma != 1) and (not pcs):
+            Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
+            S_abs = S_abs.clamp_min(1e-12).pow(gamma)
+            # Y_angle = Y_angle.clamp_min(1e-12).pow(gamma)
+            # S_angle = S_angle.clamp_min(1e-12).pow(gamma)
+        # print(Y_abs.shape, nfft)
+        ind_half = Y.shape[1] // 2
+
+        loss += _compute_mr(Y[:, :ind_half, :], Y_abs[:, :ind_half, :], S[:, :ind_half, :], S_abs[:, :ind_half, :]) + _compute_mr(Y[:, ind_half:, :], Y_abs[:, ind_half:, :], S[:, ind_half:, :], S_abs[:, ind_half:, :])
+                #  _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
+                #  _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
+                #  _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :]))
+    #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
+    # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
+    return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
 
 
 def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
