@@ -217,7 +217,7 @@ def model_eval_old(model, input_spec, configs, device="cpu", hid_size=64, h0=Non
     out_abs, out_pha = output.abs(), output.angle()
     abs_addon = torch.permute(abs_addon, dims=(0, 3, 1, 2))
     # print(out_abs.shape, abs_addon.shape)
-    out_abs += abs_addon[..., -1]
+    out_abs = (out_abs + abs_addon[..., -1]) / 2
     # output = torch.permute(output, dims=(0, 3, 1, 2))
     result = torch.polar(out_abs, out_pha)
 

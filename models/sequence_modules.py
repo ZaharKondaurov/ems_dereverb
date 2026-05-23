@@ -12,7 +12,7 @@ from typing import List
 import torch
 from torch import nn, Tensor
 from torch.autograd import profiler
-
+from models.en_decoder import TRA
 
 class GroupRNN(nn.Module):
     def __init__(self, input_size: int,
@@ -170,6 +170,95 @@ class DualPathExtensionRNN(nn.Module):
         assert torch.isnan(intra_out).any().item() is False, "inter_chunk_fc out has NaNs"
 
         inter_out = inter_out + intra_out  # residual add
+
+        assert torch.isnan(intra_out).any().item() is False, "final residual out has NaNs"
+
+        return inter_out, hidden_state
+    
+
+class DualPathExtensionRNNTRA(nn.Module):
+    def __init__(self, input_size: int,
+                 intra_hidden_size: int,
+                 inter_hidden_size: int,
+                 groups: int,
+                 rnn_type: str,
+                 num_layers: int = 1,):
+        super().__init__()
+        assert rnn_type in ["RNN", "GRU", "LSTM"], f"rnn_type should be RNN/GRU/LSTM, but got {rnn_type}!"
+
+        self.intra_chunk_rnn = getattr(nn, rnn_type)(input_size=input_size, hidden_size=intra_hidden_size,
+                                                     num_layers=num_layers, bidirectional=True, batch_first=True) # for reduced bidirectional=False
+        self.intra_chunk_fc = nn.Linear(in_features=intra_hidden_size*2, out_features=input_size) # for reduced in_features=intra_hidden_size
+        self.intra_chunk_norm = nn.LayerNorm(normalized_shape=input_size, elementwise_affine=True)
+
+        self.inter_chunk_rnn = GroupRNN(input_size=input_size, hidden_size=inter_hidden_size, groups=groups,
+                                        rnn_type=rnn_type, num_layers=num_layers)
+        self.inter_chunk_fc = nn.Linear(in_features=inter_hidden_size * groups, out_features=input_size)
+        self.tra1 = TRA(input_size)
+        self.tra2 = TRA(input_size)
+
+    def forward(self, inputs: Tensor, hidden_state: List[Tensor]):
+        """
+        :param hidden_state: List[state1, state2, ...], len(hidden_state) = groups
+        state shape = (num_layers*bidirectional, batch*[], hidden_size) if rnn_type is GRU or RNN, otherwise,
+        state = (h0, c0), h0/c0 shape = (num_layers*bidirectional, batch*[], hidden_size).
+        :param inputs: (B, F, T, N)
+        :return:
+        """
+        B, F, T, N = inputs.shape
+        intra_out = torch.transpose(inputs, dim0=1, dim1=2).contiguous()  # (B, T, F, N)
+
+        intra_out = torch.reshape(intra_out, shape=(B * T, F, N))
+        # with profiler.record_function("Intra RNN forward"):
+        intra_out, _ = self.intra_chunk_rnn(intra_out)
+
+        assert torch.isnan(intra_out).any().item() is False, "intra_chunk_rnn out has NaNs"
+        # if torch.isnan(intra_out).any().item() is True:
+        #     print(f"intra_chunk_rnn out has NaNs")
+
+        # intra_out = torch.reshape(intra_out, (B, T, F, N * 2))
+        # intra_out = torch.permute(intra_out, (0, 3, 2, 1))
+        # intra_out = self.tra1(intra_out)
+        # intra_out = torch.permute(intra_out, (0, 3, 2, 1))
+        # intra_out = torch.reshape(intra_out, (B * T, F, N * 2))
+
+        intra_out = self.intra_chunk_fc(intra_out)  # (B * T, F, N)
+
+        assert torch.isnan(intra_out).any().item() is False, "intra_chunk_fc out has NaNs"
+        # if torch.isnan(intra_out).any().item() is True:
+        #     print(f"intra_chunk_fc out has NaNs")
+
+        intra_out = torch.reshape(intra_out, shape=(B, T, F, N))
+        intra_out = torch.transpose(intra_out, dim0=1, dim1=2).contiguous()  # (B, F, T, N)
+        intra_out = self.intra_chunk_norm(intra_out)  # (B, F, T, N)
+
+        assert torch.isnan(intra_out).any().item() is False, "intra_chunk_norm out has NaNs"
+        # if torch.isnan(intra_out).any().item() is True:
+        #     print(f"intra_chunk_norm out has NaNs")
+
+        intra_out = inputs + intra_out  # residual add
+        assert torch.isnan(intra_out).any().item() is False, "residual out has NaNs"
+
+        intra_out = self.tra1(intra_out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        inter_out = torch.reshape(intra_out, shape=(B * F, T, N))  # (B*F, T, N)
+        # with profiler.record_function("Inter RNN forward"):
+        inter_out, hidden_state = self.inter_chunk_rnn(inter_out, hidden_state)
+
+        # inter_out = torch.reshape(inter_out, (B, F, T, N))
+        # inter_out = torch.permute(inter_out, (0, 3, 2, 1))
+        # inter_out = self.tra2(inter_out)
+        # inter_out = torch.permute(inter_out, (0, 3, 2, 1))
+        # inter_out = torch.reshape(inter_out, (B * T, F, N))
+
+        assert torch.isnan(inter_out).any().item() is False, "inter_chunk_rnn out has NaNs"
+
+        inter_out = torch.reshape(inter_out, shape=(B, F, T, -1))  # (B, F, T, groups * N)
+        inter_out = self.inter_chunk_fc(inter_out)  # (B, F, T, N)
+
+        assert torch.isnan(intra_out).any().item() is False, "inter_chunk_fc out has NaNs"
+        # print(inter_out.shape, intra_out.shape)
+        inter_out = inter_out + intra_out  # residual add
+        inter_out = self.tra2(inter_out.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
         assert torch.isnan(intra_out).any().item() is False, "final residual out has NaNs"
 

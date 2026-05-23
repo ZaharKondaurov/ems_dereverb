@@ -11,3 +11,16 @@ data/*
 */mlruns/*
 */runs/*
 */lightning_logs/*
+.vscode/
+NISQA_s/
+app_test/
+checkpoints/
+dfn*/
+*.wav
+gtcrn/
+input/
+runs/
+samples/
+*.csv
+*.zip
+notebooks/*.py
