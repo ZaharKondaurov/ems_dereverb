@@ -2,16 +2,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from torchmetrics.audio.pesq import PerceptualEvaluationSpeechQuality
-from models.fspen import FullSubPathExtension, DiscriminatorModel
+from models.fspen import FullSubPathExtension
 from src.fspen_configs import TrainConfig
-from src.utils import use_pcs, vorbis_window
+from src.utils import vorbis_window
 
 
 def _compute_mr(Y: torch.Tensor, Y_abs: torch.Tensor, S: torch.Tensor, S_abs: torch.Tensor) -> torch.Tensor:
     x1 = F.mse_loss(Y_abs, S_abs)
     x2 = F.mse_loss(torch.abs(Y_abs * (Y / (torch.abs(Y) + 1e-9))), torch.abs(S_abs * (S / (torch.abs(S) + 1e-9))))
-    # print(f"Abs: {x1:.2f}, Pha: {x2:.2f}")
     return x1 + x2
 
 def anti_wrapping_function(x):
@@ -19,6 +17,49 @@ def anti_wrapping_function(x):
 
 def loss_clipping_penalty(input: torch.Tensor, tau: float = 0.99, p: int = 1):
     return torch.mean(F.relu(input.abs() - tau) ** p)
+
+
+def _stft_pair(input: torch.Tensor, target: torch.Tensor, nfft: int, hop_fr: float):
+    Y = torch.stft(
+        input,
+        n_fft=nfft,
+        hop_length=int(nfft * hop_fr),
+        window=torch.hann_window(nfft, device=input.device),
+        normalized=True,
+        return_complex=True,
+    )
+    S = torch.stft(
+        target,
+        n_fft=nfft,
+        hop_length=int(nfft * hop_fr),
+        window=torch.hann_window(nfft, device=target.device),
+        normalized=True,
+        return_complex=True,
+    )
+    return Y, S
+
+
+def _prepare_mr_terms(
+    input: torch.Tensor,
+    target: torch.Tensor,
+    nfft: int,
+    hop_fr: float,
+    gamma: float,
+    pcs: bool,
+):
+    Y, S = _stft_pair(input, target, nfft, hop_fr)
+
+    if not pcs:
+        Y = use_pcs(Y, nfft)
+
+    Y_abs = Y.abs()
+    S_abs = S.abs()
+
+    if (gamma != 1) and (not pcs):
+        Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
+        S_abs = S_abs.clamp_min(1e-12).pow(gamma)
+
+    return Y, S, Y_abs, S_abs
 
 
 def hybrid_loss(pred_stft, true_stft, n_fft):
@@ -45,35 +86,9 @@ def hybrid_loss(pred_stft, true_stft, n_fft):
 def loss_compressed_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False, lambd=0.3) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
-    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
     loss = torch.zeros((), device=input.device, dtype=input.dtype)
     for nfft in nffts:
-        Y = torch.stft(
-            input,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=input.device),
-            normalized=True,
-            return_complex=True,
-        )
-        S = torch.stft(
-            target,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=target.device),
-            normalized=True,
-            return_complex=True,
-        )
-
-        if not pcs:
-            Y = use_pcs(Y, nfft)
-            
-        Y_abs = Y.abs()
-        S_abs = S.abs()
-
-        if (gamma != 1) and (not pcs):
-            Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
-            S_abs = S_abs.clamp_min(1e-12).pow(gamma)
+        Y, S, Y_abs, S_abs = _prepare_mr_terms(input, target, nfft, hop_fr, gamma, pcs)
 
         loss += (1 - lambd) * torch.mean((Y_abs - S_abs).abs() ** 2) + lambd * torch.mean(torch.abs(Y_abs * (Y / (torch.abs(Y) + 1e-9)) - S_abs * (S / (torch.abs(S) + 1e-9))) ** 2)
 
@@ -83,122 +98,34 @@ def loss_compressed_MR(input: torch.Tensor, target: torch.Tensor, gamma: float =
 def loss_MR_half(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
-    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
     loss = torch.zeros((), device=input.device, dtype=input.dtype)
     for nfft in nffts:
-        Y = torch.stft(
-            input,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=input.device),
-            normalized=True,
-            return_complex=True,
-        )
-        S = torch.stft(
-            target,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=target.device),
-            normalized=True,
-            return_complex=True,
-        )
-
-        if not pcs:
-            Y = use_pcs(Y, nfft)
-            
-        Y_abs = Y.abs()
-        S_abs = S.abs()
-        # Try loss for angle
-        # Y_angle = Y.angle()
-        # S_angle = S.angle()
-        if (gamma != 1) and (not pcs):
-            Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
-            S_abs = S_abs.clamp_min(1e-12).pow(gamma)
-            # Y_angle = Y_angle.clamp_min(1e-12).pow(gamma)
-            # S_angle = S_angle.clamp_min(1e-12).pow(gamma)
-        # print(Y_abs.shape, nfft)
+        Y, S, Y_abs, S_abs = _prepare_mr_terms(input, target, nfft, hop_fr, gamma, pcs)
         ind_half = Y.shape[1] // 2
 
         loss += _compute_mr(Y[:, :ind_half, :], Y_abs[:, :ind_half, :], S[:, :ind_half, :], S_abs[:, :ind_half, :]) + _compute_mr(Y[:, ind_half:, :], Y_abs[:, ind_half:, :], S[:, ind_half:, :], S_abs[:, ind_half:, :])
-                #  _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
-                #  _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
-                #  _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :]))
-    #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
-    # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
-    return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
+    return loss / len(nffts) 
 
 
 def loss_MR(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
-    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
     loss = torch.zeros((), device=input.device, dtype=input.dtype)
     for nfft in nffts:
-        Y = torch.stft(
-            input,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=input.device),
-            normalized=True,
-            return_complex=True,
-        )
-        S = torch.stft(
-            target,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=target.device),
-            normalized=True,
-            return_complex=True,
-        )
-
-        if not pcs:
-            Y = use_pcs(Y, nfft)
-            
-        Y_abs = Y.abs()
-        S_abs = S.abs()
-        # Try loss for angle
-        # Y_angle = Y.angle()
-        # S_angle = S.angle()
-        if (gamma != 1) and (not pcs):
-            Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
-            S_abs = S_abs.clamp_min(1e-12).pow(gamma)
-            # Y_angle = Y_angle.clamp_min(1e-12).pow(gamma)
-            # S_angle = S_angle.clamp_min(1e-12).pow(gamma)
-        # print(Y_abs.shape, nfft)
+        Y, S, Y_abs, S_abs = _prepare_mr_terms(input, target, nfft, hop_fr, gamma, pcs)
         low_sub_band_0 = int((nfft // 2 + 1) * 0.1)
         low_sub_band_1 = int((nfft // 2 + 1) * 0.25)
         low_sub_band_2 = int((nfft // 2 + 1) * 0.5)
         loss += _compute_mr(Y, Y_abs, S, S_abs)
-                #  _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
-                #  _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
-                #  _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :]))
-    #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
-    # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
-    return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
 
+    return loss / len(nffts) 
 
 def loss_MR_low_bins(input: torch.Tensor, target: torch.Tensor, gamma: float = 1.0, nffts: list = None, hop_fr: float = 0.25, low_freq_ratio: float = 0.25, pcs: bool = False) -> torch.Tensor:
     if nffts is None:
         nffts = [1024, 512, 256]
-    # print(input.isnan().any(), target.isnan().any(), ' inputs of MR loss')
     loss = torch.zeros((), device=input.device, dtype=input.dtype)
     for nfft in nffts:
-        Y = torch.stft(
-            input,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=input.device),
-            normalized=True,
-            return_complex=True,
-        )
-        S = torch.stft(
-            target,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=target.device),
-            normalized=True,
-            return_complex=True,
-        )
+        Y, S = _stft_pair(input, target, nfft, hop_fr)
 
         Y = Y[:, Y.shape[1] // 24, :]
         S = S[:, S.shape[1] // 24, :]
@@ -208,25 +135,17 @@ def loss_MR_low_bins(input: torch.Tensor, target: torch.Tensor, gamma: float = 1
             
         Y_abs = Y.abs()
         S_abs = S.abs()
-        # Try loss for angle
-        # Y_angle = Y.angle()
-        # S_angle = S.angle()
+
         if (gamma != 1) and (not pcs):
             Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
             S_abs = S_abs.clamp_min(1e-12).pow(gamma)
-            # Y_angle = Y_angle.clamp_min(1e-12).pow(gamma)
-            # S_angle = S_angle.clamp_min(1e-12).pow(gamma)
-        # print(Y_abs.shape, nfft)
+
         low_sub_band_0 = int((nfft // 2 + 1) * 0.1)
         low_sub_band_1 = int((nfft // 2 + 1) * 0.25)
         low_sub_band_2 = int((nfft // 2 + 1) * 0.5)
         loss += _compute_mr(Y, Y_abs, S, S_abs)
-                #  _compute_mr(Y[..., :low_sub_band_0, :], Y_abs[..., :low_sub_band_0, :], S[..., :low_sub_band_0, :], S_abs[..., :low_sub_band_0, :]) +
-                #  _compute_mr(Y[..., :low_sub_band_1, :], Y_abs[..., :low_sub_band_1, :], S[..., :low_sub_band_1, :], S_abs[..., :low_sub_band_1, :]) +
-                #  _compute_mr(Y[..., :low_sub_band_2, :], Y_abs[..., :low_sub_band_2, :], S[..., :low_sub_band_2, :], S_abs[..., :low_sub_band_2, :]))
-    #     print(loss.shape, loss, f' !!!!!!!!!lossMR for {nfft}!!!!!!!!!!!!')
-    # print(loss.shape, loss, ' !!!!!!!!!lossMR!!!!!!!!!!!!')
-    return loss / len(nffts) # + loss_MR_w(input, target) * 0.3
+
+    return loss / len(nffts)
 
 
 def loss_MR_PCS(input: torch.Tensor, target: torch.Tensor, nffts: list = None, hop_fr: float = 0.25) -> torch.Tensor:
@@ -234,30 +153,12 @@ def loss_MR_PCS(input: torch.Tensor, target: torch.Tensor, nffts: list = None, h
         nffts = [1024, 512, 256]
     loss = torch.zeros((), device=input.device, dtype=input.dtype)
     for nfft in nffts:
-        Y = torch.stft(
-            input,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=input.device),
-            normalized=True,
-            return_complex=True,
-        )
-        S = torch.stft(
-            target,
-            n_fft=nfft,
-            hop_length=int(nfft * hop_fr),
-            window=torch.hann_window(nfft, device=target.device),
-            normalized=True,
-            return_complex=True,
-        )
+        Y, S = _stft_pair(input, target, nfft, hop_fr)
 
         Y = use_pcs(Y, n_fft=nfft)
 
         Y_abs = Y.abs()
         S_abs = S.abs()
-        # if gamma != 1:
-        #     Y_abs = Y_abs.clamp_min(1e-12).pow(gamma)
-        #     S_abs = S_abs.clamp_min(1e-12).pow(gamma)
 
         loss += _compute_mr(Y, Y_abs, S, S_abs)
     return loss / len(nffts)
@@ -372,7 +273,6 @@ def phase_losses(phase_r, phase_g):
 def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
     if lens is None:
         lens = [4064, 2032,] #1016, 508]
-    # print(input.isnan().any(), target.isnan().any(), ' inputs of MRw loss')
     loss = torch.zeros((), device=input.device, dtype=input.dtype)
     for seg in lens:
         input_chunks = torch.split(input, seg, dim=1)
@@ -382,10 +282,7 @@ def loss_MR_w(input: torch.Tensor, target: torch.Tensor, lens: list = None):
         for in_ch, tg_ch in zip(input_chunks, target_chunks):
             cossim = -F.cosine_similarity(in_ch, tg_ch) + 1
             loss_interm += cossim
-        # print(loss_interm.shape, ' cossim loss')
         loss += torch.sum(loss_interm, dim=0) / loss_interm.shape[0] / len(input_chunks)
-        # print(loss, f' !!!!!!!!!lossMRw for {seg}!!!!!!!!!!!!')
-    # print(loss.shape, loss,  ' !!!!!!!!!lossMRw!!!!!!!!!!!!')
     return loss / len(lens)
 
 
@@ -404,62 +301,10 @@ def loss_tot(input_signal: torch.Tensor, target: torch.Tensor,
         loss_mr_w += loss_MR_w(rir, target_rir, lens)
         loss_mr += loss_MR(rir, target_rir, gamma, nffts, hop_fr)
 
-    # loss_mr = (loss_MR(input_signal, target, gamma, nffts, hop_fr) + loss_MR(noise, target_noise, gamma, nffts, hop_fr)
-    #            + loss_MR(rir, target_rir, gamma, nffts, hop_fr))
     return loss_mr_w + 2 * loss_mr
 
 
-class MagnitudeConsistencyLoss(nn.Module):
-
-    def __init__(self):
-        super(MagnitudeConsistencyLoss, self).__init__()
-        self.mse = nn.MSELoss()
-
-    def forward(self, gt, x):
-        return self.mse(gt, x)
-
-
-class DiscriminatorLoss(nn.Module):
-
-    def __init__(self, sr=16_000, mode="wb", device="cpu"):
-        super(DiscriminatorLoss, self).__init__()
-        self.mse_1 = nn.MSELoss()
-        self.mse_2 = nn.MSELoss()
-        self.pesq = PerceptualEvaluationSpeechQuality(sr, mode)
-        self.device = device
-
-    def forward(self, d_m, d_cons, gt_wave, x_wave):
-        # pesq_ = (self.pesq(x_wave, gt_wave) + 0.5) / 5.
-
-        return (self.mse_1(d_m, torch.zeros_like(d_m, device=self.device))
-                + self.mse_2(d_cons, torch.ones_like(d_cons, device=self.device)))
-
-
-class MetricLoss(nn.Module):
-    def __init__(self, device="cpu"):
-        super(MetricLoss, self).__init__()
-        self.mse = nn.MSELoss()
-        self.device = device
-
-    def forward(self, d_cons):
-        return self.mse(d_cons, torch.ones_like(d_cons, device=self.device))
-
-
-class GeneratorLoss(nn.Module):
-    def __init__(self, l1=1.0, l2=0., device="cpu"):
-        super(GeneratorLoss, self).__init__()
-        self.l1 = l1
-        self.l2 = l2
-        self.mag_loss = MagnitudeConsistencyLoss()
-        self.metric = MetricLoss(device)
-
-    def forward(self, gt, x, d_m):
-        return self.l1 * loss_tot(x, gt) + self.l2 * self.metric(d_m)
-
-
 if __name__ == '__main__':
-    d_loss = DiscriminatorLoss()
-    g_loss = GeneratorLoss(0.5, 0.5)
 
     x_ = torch.randn([2, 126, 2, 257])
     x_abs = torch.randn([2, 126, 1, 257])
@@ -478,7 +323,3 @@ if __name__ == '__main__':
     discr_output = discr(output)
     print(discr_output.shape)
     output = output.reshape(2 * 2, output.shape[1], output.shape[3])
-    g_out = g_loss(output, output, discr_output)
-    print(g_out)
-    d_out = d_loss(discr_output, discr_output, torch.ones((1, 16_000)), torch.ones((1, 16_000)))
-    print(d_out)

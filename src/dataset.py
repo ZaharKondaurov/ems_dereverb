@@ -20,7 +20,7 @@ from random import shuffle, randint, choice, uniform
 from time import time
 import pandas as pd
 
-WALLS_KEYWORDS = ["hard_surface", "ceramic_tiles", "plasterboard", "wooden_lining", "glass_3mm"]    # Убрать материалы
+WALLS_KEYWORDS = ["hard_surface", "ceramic_tiles", "plasterboard", "wooden_lining", "glass_3mm"]
 FLOOR_KEYWORDS = ["linoleum_on_concrete", "carpet_cotton"]
 CEILING_KEYWORDS = ["ceiling_plasterboard", "ceiling_fissured_tile", "ceiling_metal_panel", ]
 
@@ -48,10 +48,10 @@ class SignalDataset(ABC, Dataset):
                  mode: str = "train",):
 
         self.path = data_dir_path
-        # self.signal_files = [x for x in os.listdir(self.path) if x[-3:] == "wav"]
+
         self.audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
-        # print([os.path.splitext(f)[1] for r, d, fs in os.walk(self.path) for f in fs])
-        self.signal_files = sorted([os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions]) #  [x for x in os.listdir(self.path) if x[-3:] == "wav"]
+
+        self.signal_files = sorted([os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions])
         if partition is not None:
             self.signal_files = self.signal_files[:partition]
 
@@ -73,399 +73,9 @@ class SignalDataset(ABC, Dataset):
         self.noise_dir = noise_dir
 
         if self.noise_dir is not None:
-            self.noise_files = [os.path.join(r, f) for r, d, fs in os.walk(self.noise_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] # os.listdir(noise_dir)
-            shuffle(self.noise_files)
-            print(len(self.noise_files))
-
-        self.rir_dir = rir_dir
-        # self.rir_dir_target = rir_dir_target
-
-        self.rir_dict = None
-        # self.rir_dict_target = None
-        if isinstance(rir_dir, dict):
-            self.rir_dict = rir_dir
-            self.rir_dir = list(self.rir_dict.values())[0]
-            # if rir_dir_target is not None:
-            #     self.rir_dict_target = rir_dir_target
-            #     self.rir_dir_target = list(self.rir_dict.values())[0]
-        self.rir_target = rir_target
-        if self.rir_dir is not None:
-            self.rir_files = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions] # os.listdir(rir_dir)
-            shuffle(self.rir_files)
-            print(len(self.rir_files))
-            # if rir_target:
-            #     self.rir_files_target = [os.path.join(r + "_target", f) for r, d, fs in os.walk(self.rir_dir) for f in fs if f[-3:] == "wav"]
-
-            # if self.rir_dir_target is not None:
-            #     self.rir_files_target = [os.path.join(r, f) for r, d, fs in os.walk(self.rir_dir_target) for f in fs if f[-3:] == "wav"]
-
-        self.return_noise = return_noise
-        self.return_rir = return_rir
-        self.max_seq_len = max_seq_len
-
-        self.noise_proba = noise_proba
-        self.rir_proba = rir_proba
-        self.epoch = 0
-        self.verbose = verbose
-        self.log_file = log_file
-
-    # @staticmethod
-    # def simulate_noise(signal: torch.Tensor, noise: torch.Tensor, snr_db: int) -> torch.Tensor:
-    #     len_noise = noise.shape[-1]
-    #     noise_cat = [noise]
-    #     while len_noise < signal.shape[-1]:
-    #         len_noise += noise.shape[-1]
-    #         noise_cat.append(noise)
-    #     noise = torch.cat(noise_cat, dim=-1)
-    #
-    #     if noise.shape[-1] > signal.shape[-1]:
-    #         noise = noise[..., :signal.shape[-1]]
-    #
-    #     target_snr = (10 ** (snr_db / 10))
-    #     noise_power = torch.mean(signal ** 2) / target_snr
-    #     noise_mult = torch.sqrt(noise_power / torch.mean(noise ** 2))
-    #     abs_max = noise_mult * torch.abs(noise).max().item()
-    #     if abs_max > 1:
-    #         noise_mult /= abs_max
-    #     # rms_signal = torch.sqrt(torch.mean(signal ** 2))
-    #     # rms_noise = torch.sqrt(torch.mean(noise ** 2))
-    #     #
-    #     # target_rms_noise = rms_signal / (10 ** (snr_db / 10))
-    #
-    #     noise = noise * noise_mult # (target_rms_noise / rms_noise)
-    #     # print(noise_mult)
-    #     return noise
-
-    @staticmethod
-    def to_db(ratio):
-        assert ratio >= 0
-        ratio_db = 10. * np.log10(ratio + 1e-8)
-        return ratio_db
-
-    @staticmethod
-    def from_db(ratio_db):
-        ratio = 10 ** (ratio_db / 10.) - 1e-8
-        return ratio
-
-    def simulate_noise(self, src_audio, ns_audio, snr):
-        if ns_audio.shape[-1] < src_audio.shape[-1]:
-            ns_audio = torch.tile(ns_audio, (1, int(np.ceil(src_audio.shape[-1] / ns_audio.shape[-1]))))
-        ns_audio = ns_audio[..., :src_audio.shape[-1]]
-
-        try:
-            target_snr_n = SignalDataset.from_db(snr)
-
-            # chuncked_target = torch.chunk(src_audio, src_audio.shape[-1] // self.sr, -1)
-            # chuncked_noise = torch.chunk(ns_audio, ns_audio.shape[-1] // self.sr, -1)
-            # target_max = 0.
-            # noise_max = 0.
-            # for ind in range(len(chuncked_target)):
-            #     target_max = max(target_max, (chuncked_target[ind] ** 2).mean())
-            #     noise_max = max(noise_max, (chuncked_noise[ind] ** 2).mean())
-            
-            # target_max /= target_snr_n
-            # ns_mult = torch.sqrt(target_max / noise_max)
-
-            # cropped_src = src_audio[..., :src_audio.shape[-1]-(src_audio.shape[-1] % self.sr)]
-            # cropped_noise = ns_audio[..., :ns_audio.shape[-1]-(ns_audio.shape[-1] % self.sr)]
-
-            # cropped_src = cropped_src.reshape(-1, cropped_src.shape[-1] // self.sr, self.sr)
-            # cropped_noise = cropped_noise.reshape(-1, cropped_noise.shape[-1] // self.sr, self.sr)
-
-            # padded_src = torch.nn.functional.pad(src_audio, (0, self.sr - src_audio.shape[-1] % self.sr), "constant", 0)
-            # padded_noise = torch.nn.functional.pad(ns_audio, (0, self.sr - ns_audio.shape[-1] % self.sr), "constant", 0)
-            
-            # padded_src = padded_src.reshape(-1, padded_src.shape[-1] // self.sr, self.sr)
-            # padded_noise = padded_noise.reshape(-1, padded_noise.shape[-1] // self.sr, self.sr)
-
-            # target_max = (padded_src ** 2).mean((0, 2)).max()
-            # noise_max = (padded_noise ** 2).mean((0, 2)).max()
-
-            # target_max /= target_snr_n
-            # ns_mult = torch.sqrt(target_max / noise_max)
-
-            ns_target_sq = torch.mean(src_audio ** 2, dim=-1) / target_snr_n
-            ns_mult = torch.sqrt(ns_target_sq / torch.mean(ns_audio ** 2, dim=-1))
-        except Exception as e:
-            print('Failed!', e)
-            ns_mult = 1.
-        abs_max = ns_mult * torch.abs(ns_audio).max().item()
-        if abs_max > 1.:
-            ns_mult /= abs_max
-        ns_mult = ns_mult.item()
-        # print(ns_mult, ns_audio.shape)
-        return ns_mult * ns_audio
-    
-    def set_epoch(self, epoch: int):
-        self.epoch = epoch
-
-        if self.snr_dict is not None:
-            for step, snr in self.snr_dict.items():
-                if epoch >= step:
-                    self.snr = snr
-                else:
-                    break
-        
-        if self.rir_dict is not None:
-            self.rir_files = []
-            for step, rir_path in self.rir_dict.items():
-                if epoch >= step:
-                    self.rir_files.extend([os.path.join(r, f) for r, d, fs in os.walk(rir_path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions])
-                    # if self.rir_target:
-                    #     self.rir_files_target.extend([os.path.join(r + "_target", f) for r, d, fs in os.walk(rir_path) for f in fs if f[-3:] == "wav"])
-                else:
-                    break
-            shuffle(self.rir_files)
-
-    def simulate_rir_shoebox(self, signal: torch.Tensor) -> torch.Tensor:
-        square = uniform(*self.room_square)
-        width = uniform(2.5, square * 0.75)
-        length = square / width
-        height = uniform(*self.room_height)
-
-        rt60 = uniform(0.3, 1.25)   # Делать длинный ревёрб
-        room_dim = [length, width, height]
-
-        e_absorption, max_order = pra.inverse_sabine(rt60, room_dim)
-
-        wall = pra.Material(choice(WALLS_KEYWORDS))
-        ceil = pra.Material(choice(CEILING_KEYWORDS))
-        floor = pra.Material(choice(FLOOR_KEYWORDS))
-
-        material = {"east": wall, "west": wall, "north": wall, "south": wall, "ceiling": ceil, "floor": floor}
-
-        room = pra.ShoeBox(room_dim, fs=self.sr, materials=material, max_order=max_order,
-                           use_rand_ism=True, max_rand_disp=0.05, ray_tracing=False)
-
-        source_locs = [uniform(0.01, length), uniform(0.01, width), uniform(1.0, 2.0)]
-        mic_locs = np.array([x * 0.98 for x in source_locs])[:, None]
-
-        room.add_source(source_locs, signal=signal.squeeze(), delay=0.5)
-
-        room.add_microphone_array(mic_locs)
-        room.compute_rir()
-        room.simulate()     # Внутри есть параметр snr, возможно, он пригодится
-
-        return room.rir[0][0]   # [микрофон, источник]
-
-    @abstractmethod
-    def _preprocess(self, signal: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def __len__(self):
-        return len(self.signal_files)
-
-    @staticmethod
-    def normalize_audio(target_signal, signal=None):
-        if (signal is not None) and torch.max(torch.abs(signal)) > 0:
-            scale = torch.max(torch.abs(signal))
-            # scale = (signal ** 2).mean()
-            target_signal = target_signal / scale
-            signal = signal / scale
-
-        if torch.max(torch.abs(target_signal)) > 0:
-            # scale = (target_signal ** 2).mean()
-            scale = torch.max(torch.abs(target_signal))
-            target_signal = target_signal / scale # torch.max(torch.abs(target_signal))
-
-        return target_signal, signal
-
-    def __getitem__(self, idx):
-        if isinstance(self.snr, tuple):
-            snr_db = randint(self.snr[0], self.snr[1])
-        elif isinstance(self.snr, int):
-            snr_db = self.snr
-        elif isinstance(self.snr, list):
-            snr_db = choice(self.snr)
-        else:
-            assert "Invalid snr!"
-
-        filename = self.signal_files[idx]
-
-        target_signal, signal_sr = torchaudio.load(filename)
-
-        # print(target_signal.shape)
-        noise = None
-        rir_component = None
-        # target_signal, _ = SignalDataset.normalize_audio(target_signal)
-        if signal_sr != self.sr:
-            resampler = Resample(signal_sr, self.sr)
-            target_signal = resampler(target_signal)
-
-        if self.max_seq_len is not None:
-            start = randint(0, max(0, target_signal.numel() - self.max_seq_len))
-
-            target_signal = target_signal[..., start:start + self.max_seq_len]
-
-        rir_p = uniform(0, 1)
-        if self.rir_dir is not None and rir_p < self.rir_proba:
-            filename_rir = choice(self.rir_files)
-            rir, rir_sr = torchaudio.load(filename_rir)
-            if rir.shape[0] > 1:
-                rir = torch.from_numpy(librosa.to_mono(rir.numpy()))[None, :]
-            if rir_sr != self.sr:
-                resampler = Resample(rir_sr, self.sr)
-                rir = resampler(rir)
-
-            # rir, _ = SignalDataset.normalize_audio(rir)
-
-            rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='full', axes=-1))
-            # assert torch.isnan(rir).any().item() is False, "rir in dataset has NaNs"
-            # assert torch.isnan(rir_signal).any().item() is False, "rir_signal in dataset has NaNs"
-            # assert torch.isnan(target_signal).any().item() is False, "target_signal in dataset has NaNs"
-            rir_signal = rir_signal[..., :target_signal.shape[-1]]
-
-            if self.rir_target:
-                # rir_basename = os.path.basename(filename_rir)
-                rir_directory, rir_basename = os.path.split(filename_rir)
-                dir_, dir_name = os.path.split(rir_directory)
-                if "soft" not in dir_name:
-                    targer_rir_path = os.path.join(dir_, dir_name + "_target", rir_basename)
-
-                    target_rir, target_rir_sr = torchaudio.load(targer_rir_path)
-
-                    if target_rir.shape[0] > 1:
-                        target_rir = torch.from_numpy(librosa.to_mono(target_rir.numpy()))[None, :]
-                    if target_rir_sr != self.sr:
-                        resampler = Resample(target_rir_sr, self.sr)
-                        target_rir = resampler(target_rir)
-
-                    # target_rir, _ = SignalDataset.normalize_audio(target_rir)
-                    # start = time()
-                    target_signal = torch.from_numpy(fftconvolve(target_signal, target_rir, mode='full', axes=-1))[..., :target_signal.shape[-1]]
-                    # print("Conv:", time() - start)
-
-            rir_component = rir_signal - target_signal
-        else:
-            rir_signal = target_signal
-
-        noise_p = uniform(0, 1)
-        if self.noise_dir is not None and noise_p < self.noise_proba:
-            filename_noise = choice(self.noise_files)
-            # start = time()
-            noise, noise_sr = torchaudio.load(filename_noise)
-            # print("Load noise:", time() - start)
-            # print(noise.shape)
-            if noise.shape[0] > 1:
-                noise = torch.from_numpy(librosa.to_mono(noise.numpy()))[None, :]
-            # print(noise.shape)
-            if noise_sr != self.sr:
-                resampler = Resample(noise_sr, self.sr)
-                # start = time()
-                noise = resampler(noise)
-                # print("Noise resample:", time() - start)
-
-            # noise -= noise.mean(dim=1)
-            # noise, _ = SignalDataset.normalize_audio(noise)
-            # start = time()
-            noise = self.simulate_noise(rir_signal, noise, snr_db)
-            # print("Simulate noise:", time() - start)
-            # print(noise.shape, rir_signal.shape)
-            # assert torch.isnan(noise).any().item() is False, "noise in dataset has NaNs"
-            output = rir_signal + noise
-        else:
-            output = rir_signal
-
-        target_signal, output = SignalDataset.normalize_audio(target_signal, output)
-        # assert torch.isnan(target_signal).any().item() is False, "target_signal in dataset has NaNs"
-        # assert torch.isnan(output).any().item() is False, "output in dataset has NaNs"
-
-        if noise is not None:
-            noise, _ = SignalDataset.normalize_audio(noise)
-        if rir_component is not None:
-            rir_component, _ = SignalDataset.normalize_audio(rir_component)
-
-
-        if self.verbose:
-            to_print = [filename]
-            if self.rir_dir is not None and rir_p < self.rir_proba:
-                df = pd.read_csv(os.path.join(os.path.dirname(filename_rir), "meta.csv"))
-                df["filepath"] = df["filepath"].apply(lambda x: x.split("/")[-1])
-                # print(df["filepath"])
-                result = df[df["filepath"] == filename_rir.split("/")[-1]]
-                to_print.extend([filename_rir, result["rt60"].iloc[0]])
-            if self.rir_dir is not None and rir_p >= self.rir_proba:
-                to_print.extend(["no_file", 0.0])
-            
-            if self.noise_dir is not None and noise_p < self.noise_proba:
-                to_print.extend([filename_noise, snr_db])
-            elif self.noise_dir is not None and noise_p >= self.noise_proba:
-                to_print.extend(["no_file", -100])
-            # print(filename, filename_rir, result["rt60"].iloc[0])
-            print(*to_print)
-        
-        # if self.log_file is not None:
-
-
-        if self.max_seq_len is not None:
-            # start = np.randint(0, max(0,output.shape[-1] - self.max_seq_len))
-
-            output_padded = torch.zeros(1, self.max_seq_len)
-            output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
-
-            target_padded = torch.zeros(1, self.max_seq_len)
-            target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
-
-            rir_padded = None
-            if (self.rir_dir is not None) and self.return_rir:
-                rir_padded = torch.zeros(1, self.max_seq_len)
-                rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
-
-            noise_padded = None
-            if (self.noise_dir is not None) and self.return_noise:
-                noise_padded = torch.zeros(1, self.max_seq_len)
-                noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
-
-            # start = np.randint(0, output_padded.numel() - self.max_seq_len)
-
-            return output_padded, target_padded, noise_padded, rir_padded
-
-        return output, target_signal, noise if self.return_noise else None, rir_component if self.return_rir else None
-
-
-class BaseSignalDataset(ABC, Dataset):
-
-    def __init__(self, data_dir_path: str, sr: int = 16_000,
-                 snr: Union[int, Tuple[int, int], List[int], Dict[int, List[int]]] = 0,
-                 chunk_size: int = 16_000 * 2,
-                 stride: int = 16_000,
-                 noise_dir: str = None,
-                 rir_dir: Union[str, Dict[int, str]] = None,
-                 rir_target: bool = False,
-                 room_square: Tuple[float, float] = (7., 14.),
-                 room_height: Tuple[float, float] = (3., 4.),
-                 return_noise: bool = False,
-                 return_rir: bool = False,
-                 max_seq_len: int = None,
-                 partition: int = None,
-                 noise_proba: float = 1.0,
-                 rir_proba: float = 1.0,
-                 mode="train"):
-
-        self.path = data_dir_path
-        self.audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
-        self.signal_files = [os.path.join(r, f) for r, d, fs in os.walk(self.path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions]
-        if partition is not None:
-            self.signal_files = self.signal_files[:partition]
-        shuffle(self.signal_files)
-
-        self.sr = sr
-        self.snr = snr
-        self.snr_dict = None
-        if isinstance(snr, dict):
-            self.snr_dict = snr
-            self.snr = list(self.snr_dict.values())[0]
-
-        self.chunk_size = chunk_size
-        self.stride = stride
-        self.room_square = room_square
-        self.room_height = room_height
-
-        self.noise_dir = noise_dir
-
-        if self.noise_dir is not None:
             self.noise_files = [os.path.join(r, f) for r, d, fs in os.walk(self.noise_dir) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions]
             shuffle(self.noise_files)
+            print(len(self.noise_files))
 
         self.rir_dir = rir_dir
 
@@ -486,6 +96,8 @@ class BaseSignalDataset(ABC, Dataset):
         self.noise_proba = noise_proba
         self.rir_proba = rir_proba
         self.epoch = 0
+        self.verbose = verbose
+        self.log_file = log_file
 
     @staticmethod
     def to_db(ratio):
@@ -498,39 +110,24 @@ class BaseSignalDataset(ABC, Dataset):
         ratio = 10 ** (ratio_db / 10.) - 1e-8
         return ratio
 
-    @staticmethod
-    def simulate_noise(src_audio, ns_audio, snr, sr):
+    def simulate_noise(self, src_audio, ns_audio, snr):
         if ns_audio.shape[-1] < src_audio.shape[-1]:
             ns_audio = torch.tile(ns_audio, (1, int(np.ceil(src_audio.shape[-1] / ns_audio.shape[-1]))))
         ns_audio = ns_audio[..., :src_audio.shape[-1]]
 
-        # try:
-        target_snr_n = SignalDataset.from_db(snr)
+        try:
+            target_snr_n = SignalDataset.from_db(snr)
 
-        padded_src = torch.nn.functional.pad(src_audio, (0, sr - src_audio.shape[-1] % sr), "constant", 0)
-        padded_noise = torch.nn.functional.pad(ns_audio, (0, sr - ns_audio.shape[-1] % sr), "constant", 0)
-        
-        padded_src = padded_src.reshape(-1, padded_src.shape[-1] // sr, sr)
-        padded_noise = padded_noise.reshape(-1, padded_noise.shape[-1] // sr, sr)
-
-        target_max = (padded_src ** 2).mean(dim=-1).max(dim=-1).values
-        noise_max = (padded_noise ** 2).mean(dim=-1).max(dim=-1).values
-
-        target_max /= target_snr_n
-        ns_mult = torch.sqrt(target_max / noise_max)
-
-        # except Exception as e:
-        #     print('Failed!', e)
-        #     ns_mult = 1.
-        # print(ns_audio.shape)
-        abs_max = ns_mult * torch.abs(ns_audio).max(dim=-1).values.squeeze()# .item()
-        # if abs_max > 1.:
-        # print(abs_max)
-        # print(abs_max.shape, ns_mult.shape)
-        ns_mult[abs_max > 1] /= abs_max
-        # ns_mult = ns_mult# .item()
-        # print(ns_mult.shape, ns_audio.shape)
-        return ns_mult[:, None, None] * ns_audio
+            ns_target_sq = torch.mean(src_audio ** 2, dim=-1) / target_snr_n
+            ns_mult = torch.sqrt(ns_target_sq / torch.mean(ns_audio ** 2, dim=-1))
+        except Exception as e:
+            print('Failed!', e)
+            ns_mult = 1.
+        abs_max = ns_mult * torch.abs(ns_audio).max().item()
+        if abs_max > 1.:
+            ns_mult /= abs_max
+        ns_mult = ns_mult.item()
+        return ns_mult * ns_audio
     
     def set_epoch(self, epoch: int):
         self.epoch = epoch
@@ -547,7 +144,6 @@ class BaseSignalDataset(ABC, Dataset):
             for step, rir_path in self.rir_dict.items():
                 if epoch >= step:
                     self.rir_files.extend([os.path.join(r, f) for r, d, fs in os.walk(rir_path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions])
-
                 else:
                     break
             shuffle(self.rir_files)
@@ -559,15 +155,12 @@ class BaseSignalDataset(ABC, Dataset):
     def normalize_audio(target_signal, signal=None):
         if (signal is not None) and torch.max(torch.abs(signal)) > 0:
             scale = torch.max(torch.abs(signal))
-            # scale = (signal ** 2).mean()
             target_signal = target_signal / scale
             signal = signal / scale
 
         if torch.max(torch.abs(target_signal)) > 0:
             scale = torch.max(torch.abs(target_signal))
-            # scale = (target_signal ** 2).mean()
-            target_signal = target_signal / scale # torch.max(torch.abs(target_signal))
-
+            target_signal = target_signal / scale
         return target_signal, signal
 
     def __getitem__(self, idx):
@@ -581,15 +174,12 @@ class BaseSignalDataset(ABC, Dataset):
             assert "Invalid snr!"
 
         filename = self.signal_files[idx]
-        start = time()
+
         target_signal, signal_sr = torchaudio.load(filename)
-        print("Load clean signal:", time() - start)
 
         noise = None
         rir_component = None
-        start = time()
-        target_signal, _ = SignalDataset.normalize_audio(target_signal)
-        print("Normalize clean signal:", time() - start)
+
         if signal_sr != self.sr:
             resampler = Resample(signal_sr, self.sr)
             target_signal = resampler(target_signal)
@@ -599,85 +189,103 @@ class BaseSignalDataset(ABC, Dataset):
 
             target_signal = target_signal[..., start:start + self.max_seq_len]
 
-        start = time()
-        filename_rir = choice(self.rir_files)
-        print("Choice rir:", time() - start)
-        start = time()
-        rir, rir_sr = torchaudio.load(filename_rir)
-        print("Load rir:", time() - start)
-        if rir.shape[0] > 1:
-            rir = torch.from_numpy(librosa.to_mono(rir.numpy()))[None, :]
-        if rir_sr != self.sr:
-            resampler = Resample(rir_sr, self.sr)
-            rir = resampler(rir)
-        rir, _ = SignalDataset.normalize_audio(rir)
+        rir_p = uniform(0, 1)
+        if self.rir_dir is not None and rir_p < self.rir_proba:
+            filename_rir = choice(self.rir_files)
+            rir, rir_sr = torchaudio.load(filename_rir)
+            if rir.shape[0] > 1:
+                rir = torch.from_numpy(librosa.to_mono(rir.numpy()))[None, :]
+            if rir_sr != self.sr:
+                resampler = Resample(rir_sr, self.sr)
+                rir = resampler(rir)
 
-        start = time()
-        filename_noise = choice(self.noise_files)
-        print("Choice noise:", time() - start)
-        start = time()
-        noise, noise_sr = torchaudio.load(filename_noise)
-        print("Load noise:", time() - start)
-        if noise.shape[0] > 1:
-            noise = torch.from_numpy(librosa.to_mono(noise.numpy()))[None, :]
+            rir_signal = torch.from_numpy(fftconvolve(target_signal, rir, mode='full', axes=-1))
 
-        if noise_sr != self.sr:
-            resampler = Resample(noise_sr, self.sr)
-            noise = resampler(noise)
-        start = time()
-        noise, _ = SignalDataset.normalize_audio(noise)
-        print("Norm noise:", time() - start)
+            rir_signal = rir_signal[..., :target_signal.shape[-1]]
+
+            if self.rir_target:
+                rir_directory, rir_basename = os.path.split(filename_rir)
+                dir_, dir_name = os.path.split(rir_directory)
+                if "soft" not in dir_name:
+                    targer_rir_path = os.path.join(dir_, dir_name + "_target", rir_basename)
+
+                    target_rir, target_rir_sr = torchaudio.load(targer_rir_path)
+
+                    if target_rir.shape[0] > 1:
+                        target_rir = torch.from_numpy(librosa.to_mono(target_rir.numpy()))[None, :]
+                    if target_rir_sr != self.sr:
+                        resampler = Resample(target_rir_sr, self.sr)
+                        target_rir = resampler(target_rir)
+
+                    target_signal = torch.from_numpy(fftconvolve(target_signal, target_rir, mode='full', axes=-1))[..., :target_signal.shape[-1]]
+
+            rir_component = rir_signal - target_signal
+        else:
+            rir_signal = target_signal
+
+        noise_p = uniform(0, 1)
+        if self.noise_dir is not None and noise_p < self.noise_proba:
+            filename_noise = choice(self.noise_files)
+            noise, noise_sr = torchaudio.load(filename_noise)
+            if noise.shape[0] > 1:
+                noise = torch.from_numpy(librosa.to_mono(noise.numpy()))[None, :]
+
+            if noise_sr != self.sr:
+                resampler = Resample(noise_sr, self.sr)
+                noise = resampler(noise)
+
+            noise = self.simulate_noise(rir_signal, noise, snr_db)
+            output = rir_signal + noise
+        else:
+            output = rir_signal
+
+        target_signal, output = SignalDataset.normalize_audio(target_signal, output)
+
+        if noise is not None:
+            noise, _ = SignalDataset.normalize_audio(noise)
+        if rir_component is not None:
+            rir_component, _ = SignalDataset.normalize_audio(rir_component)
+
+
+        if self.verbose:
+            to_print = [filename]
+            if self.rir_dir is not None and rir_p < self.rir_proba:
+                df = pd.read_csv(os.path.join(os.path.dirname(filename_rir), "meta.csv"))
+                df["filepath"] = df["filepath"].apply(lambda x: x.split("/")[-1])
+
+                result = df[df["filepath"] == filename_rir.split("/")[-1]]
+                to_print.extend([filename_rir, result["rt60"].iloc[0]])
+            if self.rir_dir is not None and rir_p >= self.rir_proba:
+                to_print.extend(["no_file", 0.0])
+            
+            if self.noise_dir is not None and noise_p < self.noise_proba:
+                to_print.extend([filename_noise, snr_db])
+            elif self.noise_dir is not None and noise_p >= self.noise_proba:
+                to_print.extend(["no_file", -100])
+
+            print(*to_print)
+
         if self.max_seq_len is not None:
+
+            output_padded = torch.zeros(1, self.max_seq_len)
+            output_padded[..., :output.shape[-1]] = output[..., :self.max_seq_len]
+
             target_padded = torch.zeros(1, self.max_seq_len)
             target_padded[..., :target_signal.shape[-1]] = target_signal[..., :self.max_seq_len]
 
-            # rir_padded = None
-            # if (self.rir_dir is not None) and self.return_rir:
-            #     rir_padded = torch.zeros(1, self.max_seq_len)
-            #     rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
+            rir_padded = None
+            if (self.rir_dir is not None) and self.return_rir:
+                rir_padded = torch.zeros(1, self.max_seq_len)
+                rir_padded[..., :rir_component.shape[-1]] = rir_component[..., :self.max_seq_len]
 
-            # noise_padded = None
+            noise_padded = None
             if (self.noise_dir is not None) and self.return_noise:
-                start = randint(0, max(0, noise.numel() - self.max_seq_len))
-
                 noise_padded = torch.zeros(1, self.max_seq_len)
-                noise_padded[..., :noise.shape[-1]] = noise[..., start:start + self.max_seq_len]
+                noise_padded[..., :noise.shape[-1]] = noise[..., :self.max_seq_len]
 
-            return target_padded, noise_padded, rir, snr_db
+            return output_padded, target_padded, noise_padded, rir_padded
 
-        return target_signal, noise, rir, snr_db
-
-class TRUNetDataset(SignalDataset):
-
-    def __init__(self, data_dir_path: str, sr: int = 16_000,
-                 snr: Union[int, Tuple[int, int], List[int], Dict[int, List[int]]] = 0,
-                 chunk_size: int = 16_000 * 2,
-                 stride: int = 16_000,
-                 noise_dir: str = None,
-                 rir_dir: Union[str, Dict[int, str]] = None,
-                 rir_target: bool = False,
-                 room_square: Tuple[float, float] = (7., 14.),
-                 room_height: Tuple[float, float] = (3., 4.),
-                 return_noise: bool = False,
-                 return_rir: bool = False,
-                 max_seq_len: int = None,
-                 partition: int = None,
-                 noise_proba: float = 1.0,
-                 rir_proba: float = 1.0,
-                 verbose: bool = False,
-                 shuffle_files: bool = True,
-                 mode="train",):
-
-        super(TRUNetDataset, self).__init__(data_dir_path=data_dir_path, sr=sr, snr=snr, chunk_size=chunk_size,
-                                            stride=stride, noise_dir=noise_dir, rir_dir=rir_dir, rir_target=rir_target, 
-                                            room_square=room_square,
-                                            room_height=room_height, return_noise=return_noise,
-                                            return_rir=return_rir, max_seq_len=max_seq_len, partition=partition,
-                                            noise_proba=noise_proba, rir_proba=rir_proba, verbose=verbose, shuffle_files=shuffle_files, mode=mode)
-
-    @staticmethod
-    def _preprocess(signal: torch.Tensor) -> torch.Tensor:
-        return signal
+        return output, target_signal, noise if self.return_noise else None, rir_component if self.return_rir else None
 
 
 class VoiceBankDataset(ABC, Dataset):
@@ -695,9 +303,9 @@ class VoiceBankDataset(ABC, Dataset):
         self.noise_dir_path = noise_dir_path
         self.clean_dir_path = clean_dir_path
         self.audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
-        # self.signal_files = [x for x in os.listdir(self.noise_path) if os.path.splitext(x)[-1] in self.audio_extensions]
+
         self.signal_files = [os.path.relpath(os.path.join(r, f), self.noise_dir_path) for r, d, fs in os.walk(self.noise_dir_path) for f in fs if os.path.splitext(f)[-1] in self.audio_extensions]
-        # print(self.signal_files)
+
         if partition is not None:
             self.signal_files = self.signal_files[:partition]
         shuffle(self.signal_files)
