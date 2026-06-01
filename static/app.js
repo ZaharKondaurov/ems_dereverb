@@ -1,18 +1,16 @@
 /**
- * FSPEN live client: mic → WebSocket → enhanced audio + scrolling spectrograms.
+ * FSPEN web client: Live (WebSocket) + File (REST) + model catalog.
  */
 
 const N_COLS = 512;
 const N_FREQ_DEFAULT = 513;
-/** Rendered spectrogram height (downsampled from full STFT bins). */
 const SPEC_DISPLAY_ROWS = 256;
 const TARGET_SR = 48000;
 const AUDIO_BUFFER_SIZE = 4096;
-/** Start playback after this much audio is buffered (absorbs inference jitter). */
 const MIN_PLAY_SAMPLES = Math.floor(TARGET_SR * 0.15);
 const PLAY_RING_CAP = TARGET_SR * 4;
-/** Headphone output gain (browser DAC often runs hot). */
 const PLAYBACK_GAIN = 0.82;
+
 function dbToColor(db) {
   const t = Math.max(0, Math.min(1, (db + 80) / 80));
   const r = Math.min(255, Math.max(0, 255 * Math.min(1, t * 2.5)));
@@ -22,9 +20,7 @@ function dbToColor(db) {
 }
 
 function resampleLinear(samples, fromRate, toRate) {
-  if (fromRate === toRate || samples.length === 0) {
-    return samples;
-  }
+  if (fromRate === toRate || samples.length === 0) return samples;
   const outLen = Math.max(1, Math.round((samples.length * toRate) / fromRate));
   const out = new Float32Array(outLen);
   const ratio = fromRate / toRate;
@@ -39,7 +35,6 @@ function resampleLinear(samples, fromRate, toRate) {
   return out;
 }
 
-/** Max-pool STFT column to fewer display rows. */
 function downsampleColumn(col, nFreq, nRows) {
   const out = new Float32Array(nRows);
   for (let r = 0; r < nRows; r++) {
@@ -112,10 +107,10 @@ class ScrollingSpectrogram {
   }
 }
 
-/** Continuous playback from a ring buffer (avoids gaps between WebSocket chunks). */
 class StreamPlayback {
   constructor(audioContext) {
     this.ctx = audioContext;
+    this.muted = false;
     this.ring = new Float32Array(PLAY_RING_CAP);
     this.w = 0;
     this.r = 0;
@@ -130,16 +125,25 @@ class StreamPlayback {
     this.node.onaudioprocess = (e) => {
       const out = e.outputBuffer.getChannelData(0);
       for (let i = 0; i < out.length; i++) {
-        if (this.primed && this.available > 0) {
+        if (!this.muted && this.primed && this.available > 0) {
           out[i] = this._readOne();
           this.lastSample = out[i];
         } else {
-          out[i] = this.lastSample;
+          out[i] = this.muted ? 0 : this.lastSample;
         }
       }
     };
     this.node.connect(this.gain);
     this.gain.connect(this.ctx.destination);
+  }
+
+  setMuted(muted) {
+    this.muted = muted;
+    if (muted) {
+      this.gain.gain.value = 0;
+    } else {
+      this.gain.gain.value = PLAYBACK_GAIN;
+    }
   }
 
   _readOne() {
@@ -150,9 +154,7 @@ class StreamPlayback {
   }
 
   _writeOne(s) {
-    if (this.available >= PLAY_RING_CAP - 1) {
-      return false;
-    }
+    if (this.available >= PLAY_RING_CAP - 1) return false;
     this.ring[this.w] = s;
     this.w = (this.w + 1) % PLAY_RING_CAP;
     this.available++;
@@ -168,10 +170,8 @@ class StreamPlayback {
   }
 
   push(samples) {
-    if (!samples.length) return;
-    if (this.available + samples.length >= PLAY_RING_CAP - 1) {
-      return;
-    }
+    if (!samples.length || this.muted) return;
+    if (this.available + samples.length >= PLAY_RING_CAP - 1) return;
 
     for (let i = 0; i < samples.length; i++) {
       if (!this._writeOne(samples[i])) break;
@@ -183,18 +183,37 @@ class StreamPlayback {
 
   disconnect() {
     this.node.disconnect();
+    this.gain.disconnect();
     this.node.onaudioprocess = null;
   }
 }
 
+// --- DOM ---
 const specIn = new ScrollingSpectrogram(document.getElementById("specIn"));
 const specOut = new ScrollingSpectrogram(document.getElementById("specOut"));
 
 const btnStart = document.getElementById("btnStart");
 const btnStop = document.getElementById("btnStop");
 const chkEnhanced = document.getElementById("chkEnhanced");
+const btnMutePlayback = document.getElementById("btnMutePlayback");
 const statusEl = document.getElementById("status");
 
+const selPreset = document.getElementById("selPreset");
+const inpChunkMs = document.getElementById("inpChunkMs");
+const btnApplyModel = document.getElementById("btnApplyModel");
+const modelStatusEl = document.getElementById("modelStatus");
+
+const tabButtons = document.querySelectorAll(".tab");
+const panelLive = document.getElementById("panelLive");
+const panelFile = document.getElementById("panelFile");
+
+const fileInput = document.getElementById("fileInput");
+const chkChunked = document.getElementById("chkChunked");
+const btnProcessFile = document.getElementById("btnProcessFile");
+const fileStatusEl = document.getElementById("fileStatus");
+const fileDownload = document.getElementById("fileDownload");
+
+let catalog = null;
 let ws = null;
 let audioCtx = null;
 let captureSampleRate = TARGET_SR;
@@ -202,10 +221,20 @@ let mediaStream = null;
 let captureProcessor = null;
 let playback = null;
 let running = false;
+let playbackMuted = false;
 let levelSmooth = 0;
+let lastDownloadUrl = null;
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+function setModelStatus(text) {
+  modelStatusEl.textContent = text;
+}
+
+function setFileStatus(text) {
+  fileStatusEl.textContent = text;
 }
 
 function wsUrl() {
@@ -213,10 +242,14 @@ function wsUrl() {
   return `${proto}//${location.host}/ws`;
 }
 
+function updateMuteButton() {
+  btnMutePlayback.textContent = playbackMuted ? "Monitor: off" : "Monitor: on";
+  btnMutePlayback.setAttribute("aria-pressed", playbackMuted ? "true" : "false");
+  if (playback) playback.setMuted(playbackMuted);
+}
+
 function sendConfig() {
-  if (playback) {
-    playback.reset();
-  }
+  if (playback && !playbackMuted) playback.reset();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "config", enhanced: chkEnhanced.checked }));
   }
@@ -254,6 +287,7 @@ async function initAudio() {
   captureSampleRate = audioCtx.sampleRate;
 
   playback = new StreamPlayback(audioCtx);
+  playback.setMuted(playbackMuted);
 
   mediaStream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -292,20 +326,25 @@ async function start() {
     ws = new WebSocket(wsUrl());
 
     ws.onopen = () => {
-      playback.reset();
+      if (playback && !playbackMuted) playback.reset();
       ws.send(JSON.stringify({ type: "reset" }));
       sendConfig();
       const srNote =
         captureSampleRate !== TARGET_SR
           ? ` · resampled ${captureSampleRate}→${TARGET_SR} Hz`
           : "";
-      setStatus(`Streaming — use headphones${srNote}`);
+      const mon = playbackMuted ? " · monitor off" : "";
+      setStatus(`Streaming${mon}${srNote}`);
     };
 
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.type === "status" && msg.flush_playback && playback) {
+      if (msg.type === "status" && msg.flush_playback && playback && !playbackMuted) {
         playback.reset();
+        return;
+      }
+      if (msg.type === "error") {
+        setStatus(`Error: ${msg.message}`);
         return;
       }
       if (msg.type !== "result") return;
@@ -318,14 +357,18 @@ async function start() {
       specOut.pushColumns(msg.spec_out_cols);
 
       const audio = new Float32Array(msg.audio || []);
-      playback.push(audio);
+      if (playback) playback.push(audio);
 
       const mode = msg.enhanced ? "enhanced" : "bypass";
       const warm = msg.warmup ? "ready" : "warmup";
       const lvl = (levelSmooth * 100).toFixed(0);
-      const bufMs = ((playback.available / TARGET_SR) * 1000).toFixed(0);
+      const bufMs = playback
+        ? ((playback.available / TARGET_SR) * 1000).toFixed(0)
+        : "—";
       const q = msg.out_q != null ? ` · q ${msg.out_q}` : "";
-      setStatus(`${mode} · ${warm} · mic ${lvl}% · buf ${bufMs}ms${q}`);
+      const rtf = msg.rtf != null && msg.rtf > 0 ? ` · RTF ${msg.rtf}` : "";
+      const mon = playbackMuted ? " · monitor off" : "";
+      setStatus(`${mode} · ${warm} · mic ${lvl}% · buf ${bufMs}ms${rtf}${q}${mon}`);
     };
 
     ws.onclose = () => {
@@ -369,6 +412,156 @@ function stop(user = true) {
   if (user) setStatus("Stopped");
 }
 
+function formatModelStatus(cur) {
+  const rtf = cur.rtf != null && cur.rtf > 0 ? ` · RTF ${cur.rtf}` : "";
+  return `Active: ${cur.preset_label} · ${cur.eval_fn}${rtf}`;
+}
+
+async function loadCatalog() {
+  const res = await fetch("/api/catalog");
+  if (!res.ok) throw new Error("Failed to load model catalog");
+  catalog = await res.json();
+
+  selPreset.innerHTML = "";
+  for (const p of catalog.presets) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    const miss = p.available ? "" : " (missing checkpoint)";
+    opt.textContent = `${p.label}${miss}`;
+    opt.disabled = !p.available;
+    if (p.id === catalog.current.preset_id) opt.selected = true;
+    selPreset.appendChild(opt);
+  }
+  inpChunkMs.value = String(catalog.current.chunk_ms);
+
+  setModelStatus(formatModelStatus(catalog.current));
+}
+
+async function applyModel() {
+  if (running) {
+    stop(false);
+    setStatus("Stopped for model change");
+  }
+
+  btnApplyModel.disabled = true;
+  setModelStatus("Loading model…");
+
+  try {
+    const body = {
+      preset_id: selPreset.value,
+      chunk_ms: parseFloat(inpChunkMs.value) || 500,
+    };
+    const res = await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = data.detail;
+      const msg = typeof d === "string" ? d : Array.isArray(d) ? d.map((x) => x.msg).join("; ") : res.statusText;
+      throw new Error(msg);
+    }
+    const cur = data.current;
+    catalog.current = cur;
+    setModelStatus(formatModelStatus(cur));
+    setFileStatus("Model updated. Process file or start Live again.");
+  } catch (e) {
+    setModelStatus(`Error: ${e.message}`);
+  } finally {
+    btnApplyModel.disabled = false;
+  }
+}
+
+async function processFile() {
+  const file = fileInput.files?.[0];
+  if (!file) return;
+
+  btnProcessFile.disabled = true;
+  fileDownload.hidden = true;
+  if (lastDownloadUrl) {
+    URL.revokeObjectURL(lastDownloadUrl);
+    lastDownloadUrl = null;
+  }
+  setFileStatus(`Processing ${file.name}…`);
+
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const url = `/api/process?chunked=${chkChunked.checked ? "true" : "false"}`;
+    const res = await fetch(url, { method: "POST", body: form });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText || res.statusText);
+    }
+
+    const blob = await res.blob();
+    const metaHdr = res.headers.get("X-FSPEN-Meta");
+    let meta = {};
+    if (metaHdr) {
+      try {
+        meta = JSON.parse(metaHdr);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    lastDownloadUrl = URL.createObjectURL(blob);
+    const outName = file.name.replace(/\.[^.]+$/, "") + "_enhanced.wav";
+    fileDownload.href = lastDownloadUrl;
+    fileDownload.download = outName;
+    fileDownload.textContent = `Download ${outName}`;
+    fileDownload.hidden = false;
+
+    const dur = meta.duration_sec != null ? `${meta.duration_sec}s` : "";
+    const rtf = meta.rtf != null && meta.rtf > 0 ? ` · RTF ${meta.rtf}` : "";
+    setFileStatus(`Done${dur ? ` · ${dur}` : ""}${rtf}`);
+    if (meta.rtf != null) {
+      setModelStatus(formatModelStatus({ ...catalog.current, rtf: meta.rtf }));
+    }
+  } catch (e) {
+    setFileStatus(`Error: ${e.message}`);
+  } finally {
+    btnProcessFile.disabled = false;
+  }
+}
+
+function switchTab(name) {
+  tabButtons.forEach((btn) => {
+    const on = btn.dataset.tab === name;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  panelLive.classList.toggle("active", name === "live");
+  panelLive.hidden = name !== "live";
+  panelFile.classList.toggle("active", name === "file");
+  panelFile.hidden = name !== "file";
+}
+
+// --- Events ---
 btnStart.addEventListener("click", () => start());
 btnStop.addEventListener("click", () => stop());
 chkEnhanced.addEventListener("change", sendConfig);
+
+btnMutePlayback.addEventListener("click", () => {
+  playbackMuted = !playbackMuted;
+  updateMuteButton();
+  if (playbackMuted && playback) playback.reset();
+});
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
+
+btnApplyModel.addEventListener("click", () => applyModel());
+
+fileInput.addEventListener("change", () => {
+  btnProcessFile.disabled = !fileInput.files?.length;
+  if (fileInput.files?.[0]) {
+    setFileStatus(`Selected: ${fileInput.files[0].name}`);
+  }
+});
+
+btnProcessFile.addEventListener("click", () => processFile());
+
+loadCatalog().catch((e) => setModelStatus(`Catalog error: ${e.message}`));

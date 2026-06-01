@@ -16,26 +16,37 @@ pinned: false
 ---
 ```
 
-## Files
+## Checkpoints
 
-- `Dockerfile` — builds and runs `web_app.py` on port **7860**
-- Put the checkpoint under `checkpoints/fspen_chkp/` (Git LFS) or set `FSPEN_CHECKPOINT` to a downloaded path in the Dockerfile
+Place these files under `checkpoints/fspen_chkp/`:
+
+| Preset | File |
+|--------|------|
+| FSPEN+48kHz | `TrainConfig_48khz_baseline.pt` |
+| FSPEN+48kHz+overlap | `TrainConfig_48kHz_overlap.pt` |
+| FSPEN+48kHz+SBLE | `TrainConfig_48kHz_enc_ext.pt` |
+| FSPEN+48kHz+SBDC+overlap | `TrainConfig_48kHz_enc_ext_lay_1_overlap.pt` |
 
 ## Environment
 
 | Variable | Default |
 |----------|---------|
-| `FSPEN_CHECKPOINT` | `checkpoints/fspen_chkp/TrainConfig_48kHz_overlap_1986#0.pt` |
+| `FSPEN_PRESET` | `fspen_48khz_overlap` |
 | `FSPEN_DEVICE` | `cpu` |
-| `FSPEN_CONFIG` | `TrainConfig_48kHz_overlap` |
+| `FSPEN_CHUNK_MS` | `500` |
 
-## Local test (same as Space)
+## Local test
 
 ```bash
 pip install -r requirements-web.txt
 pip install torch torchaudio
-python web_app.py --config TrainConfig_48kHz_overlap \\
-  --checkpoint checkpoints/fspen_chkp/TrainConfig_48kHz_overlap_1986#0.pt --chunk-ms 500
+python web_app.py --preset fspen_48khz_overlap --chunk-ms 500
 ```
 
 Open http://127.0.0.1:7860
+
+## UI
+
+- **Model** dropdown — four presets (config + checkpoint + `model_eval` / `model_eval_old`)
+- **Live** — mic, spectrograms, Enhanced/Bypass, Monitor on/off, **RTF** in status
+- **File** — upload, process, download WAV, **RTF** after processing

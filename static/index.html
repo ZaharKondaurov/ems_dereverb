@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -10,33 +10,73 @@
 <body>
   <header>
     <h1>FSPEN — fullband denoise &amp; dereverb</h1>
-    <p class="subtitle">48 kHz · WebSocket streaming · use <strong>headphones</strong></p>
+    <p class="subtitle">48 kHz · use <strong>headphones</strong> on the Live tab</p>
   </header>
 
-  <section class="controls">
-    <button id="btnStart" type="button">Start</button>
-    <button id="btnStop" type="button" disabled>Stop</button>
-    <label class="toggle">
-      <input type="checkbox" id="chkEnhanced" checked />
-      Enhanced
+  <section class="model-bar">
+    <label>
+      Model
+      <select id="selPreset"></select>
     </label>
-    <span id="status" class="status">Idle</span>
+    <label class="chunk-label">
+      Chunk (ms)
+      <input type="number" id="inpChunkMs" min="50" max="3000" step="50" value="500" />
+    </label>
+    <button id="btnApplyModel" type="button" class="secondary">Apply model</button>
+    <span id="modelStatus" class="model-status"></span>
   </section>
 
-  <section class="specs">
-    <div class="spec-panel">
-      <h2>Input (latency-matched)</h2>
-      <canvas id="specIn" width="512" height="256"></canvas>
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="live" role="tab" aria-selected="true">Live</button>
+    <button type="button" class="tab" data-tab="file" role="tab" aria-selected="false">File</button>
+  </nav>
+
+  <section id="panelLive" class="tab-panel active" role="tabpanel">
+    <div class="controls">
+      <button id="btnStart" type="button">Start</button>
+      <button id="btnStop" type="button" disabled>Stop</button>
+      <label class="toggle">
+        <input type="checkbox" id="chkEnhanced" checked />
+        Enhanced
+      </label>
+      <button id="btnMutePlayback" type="button" class="secondary" aria-pressed="false">
+        Monitor: on
+      </button>
+      <span id="status" class="status">Idle</span>
     </div>
-    <div class="spec-panel">
-      <h2>Output</h2>
-      <canvas id="specOut" width="512" height="256"></canvas>
-    </div>
+
+    <section class="specs">
+      <div class="spec-panel">
+        <h2>Input</h2>
+        <canvas id="specIn" width="512" height="256"></canvas>
+      </div>
+      <div class="spec-panel">
+        <h2>Output</h2>
+        <canvas id="specOut" width="512" height="256"></canvas>
+      </div>
+    </section>
+
+    <p class="hint">
+      Time flows left → right. Enhanced = model output; Bypass = latency-matched dry.
+      Turn off Monitor to keep spectrograms without headphone playback.
+    </p>
   </section>
 
-  <p class="hint">
-    Time flows left → right (newest on the right). If audio is silent, allow microphone access in the browser.
-  </p>
+  <section id="panelFile" class="tab-panel" role="tabpanel" hidden>
+    <div class="file-controls">
+      <label class="file-picker">
+        <span>Audio file</span>
+        <input type="file" id="fileInput" accept="audio/*,.wav,.flac,.ogg,.mp3,.m4a" />
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="chkChunked" />
+        Chunked (long files)
+      </label>
+      <button id="btnProcessFile" type="button" disabled>Process</button>
+    </div>
+    <p id="fileStatus" class="file-status">Select a file, then Process.</p>
+    <a id="fileDownload" class="download-link" href="#" download hidden>Download enhanced WAV</a>
+  </section>
 
   <script src="/static/app.js"></script>
 </body>

@@ -13,9 +13,9 @@ RUN pip install --no-cache-dir -r requirements-web.txt \
 
 COPY . /app
 
-ENV FSPEN_CHECKPOINT=checkpoints/fspen_chkp/TrainConfig_48kHz_enc_ext_1986#0.pt
+ENV FSPEN_PRESET=fspen_48khz_overlap
 ENV FSPEN_DEVICE=cpu
-ENV FSPEN_CONFIG=TrainConfig_48kHz_enc_ext
+ENV FSPEN_CHUNK_MS=500
 
 EXPOSE 7860
 
