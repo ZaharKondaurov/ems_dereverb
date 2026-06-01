@@ -1,0 +1,111 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #0f1117;
+  color: #e8eaed;
+  min-height: 100vh;
+}
+
+header {
+  padding: 1.25rem 1.5rem 0.5rem;
+  border-bottom: 1px solid #2a2f3a;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 0;
+  color: #9aa0a6;
+  font-size: 0.9rem;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+}
+
+button {
+  padding: 0.5rem 1.1rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  background: #4c8bf5;
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#btnStop {
+  background: #5f6368;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+}
+
+.status {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  margin-left: auto;
+}
+
+.specs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  padding: 0 1.5rem 1rem;
+}
+
+@media (max-width: 900px) {
+  .specs {
+    grid-template-columns: 1fr;
+  }
+}
+
+.spec-panel {
+  background: #1a1d26;
+  border-radius: 8px;
+  padding: 0.75rem;
+  border: 1px solid #2a2f3a;
+}
+
+.spec-panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #bdc1c6;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  height: auto;
+  image-rendering: pixelated;
+  background: #000;
+  border-radius: 4px;
+}
+
+.hint {
+  padding: 0 1.5rem 1.5rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}

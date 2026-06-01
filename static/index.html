@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FSPEN — Live Enhancement</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>FSPEN — fullband denoise &amp; dereverb</h1>
+    <p class="subtitle">48 kHz · WebSocket streaming · use <strong>headphones</strong></p>
+  </header>
+
+  <section class="controls">
+    <button id="btnStart" type="button">Start</button>
+    <button id="btnStop" type="button" disabled>Stop</button>
+    <label class="toggle">
+      <input type="checkbox" id="chkEnhanced" checked />
+      Enhanced
+    </label>
+    <span id="status" class="status">Idle</span>
+  </section>
+
+  <section class="specs">
+    <div class="spec-panel">
+      <h2>Input (latency-matched)</h2>
+      <canvas id="specIn" width="512" height="256"></canvas>
+    </div>
+    <div class="spec-panel">
+      <h2>Output</h2>
+      <canvas id="specOut" width="512" height="256"></canvas>
+    </div>
+  </section>
+
+  <p class="hint">
+    Time flows left → right (newest on the right). If audio is silent, allow microphone access in the browser.
+  </p>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

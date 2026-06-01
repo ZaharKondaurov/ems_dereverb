@@ -17,17 +17,16 @@ from __future__ import annotations
 
 import argparse
 import os
-import queue
 import sys
 import threading
 import time
-from collections import deque
-from typing import Deque
 
 import numpy as np
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, BASE_DIR)
+
+from src.live_session import LatencyMatchedDelayLine, LiveStreamCore  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
@@ -127,41 +126,6 @@ def _resolve_stream_device(
     return (input_device, output_device)
 
 
-class LatencyMatchedDelayLine:
-    """Ring buffer: read output is always ``delay_samples`` behind the latest input."""
-
-    def __init__(self, delay_samples: int, capacity_extra: int = 8192):
-        self.delay = delay_samples
-        cap = delay_samples + capacity_extra
-        self._buf = np.zeros(cap, dtype=np.float32)
-        self._cap = cap
-        self._write = 0
-
-    def write(self, samples: np.ndarray) -> None:
-        samples = np.asarray(samples, dtype=np.float32).reshape(-1)
-        for s in samples:
-            self._buf[self._write % self._cap] = s
-            self._write += 1
-
-    def read(self, n: int) -> np.ndarray:
-        """Return ``n`` samples from the live mic, delayed by ``delay`` samples."""
-        out = np.zeros(n, dtype=np.float32)
-        end = self._write - self.delay
-        start = end - n
-        if end <= 0:
-            return out
-        for i in range(n):
-            pos = start + i
-            if pos < 0:
-                out[i] = 0.0
-            else:
-                out[i] = self._buf[pos % self._cap]
-        return out
-
-    def __len__(self) -> int:
-        return max(0, self._write - self.delay)
-
-
 def _keyboard_thread(state: dict) -> None:
     """Toggle enhanced/bypass from terminal (non-blocking on Unix)."""
     import select
@@ -201,92 +165,24 @@ class LiveDemo:
         self.enhancer = enhancer
         self.sample_rate = sample_rate
         self.blocksize = blocksize
-
         self.enhanced = enhanced
-        self._lock = threading.Lock()
-
-        # Output queue fed by processing thread; playback reads fixed blocks.
-        self._out_queue: Deque[float] = deque()
-        self._in_queue: queue.Queue[np.ndarray] = queue.Queue()
-
-        # Latency-matched dry path: align with analysis window + hop.
-        delay_samples = enhancer.chunk_samples + enhancer.hop_samples
-        self._dry_delay = LatencyMatchedDelayLine(delay_samples)
-        # ~1 chunk of headroom before enhanced playback (reduces underrun clicks)
-        self._min_out_buffer = max(enhancer.chunk_samples // 2, blocksize * 4)
-
-        self._warmup_done = False
+        self._core = LiveStreamCore(enhancer, io_blocksize=blocksize, enhanced=enhanced)
         self._stats_last = time.time()
         self._blocks_played = 0
-        self._worker_stop = threading.Event()
-        self._worker = threading.Thread(target=self._inference_worker, daemon=True)
-        self._worker.start()
+
+    @property
+    def _dry_delay(self) -> LatencyMatchedDelayLine:
+        return self._core._dry_delay
 
     def set_enhanced(self, value: bool) -> None:
-        with self._lock:
-            self.enhanced = value
-
-    def _inference_worker(self) -> None:
-        max_backlog = 32
-        while not self._worker_stop.is_set():
-            try:
-                mono = self._in_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-
-            batch = [mono]
-            while True:
-                try:
-                    batch.append(self._in_queue.get_nowait())
-                except queue.Empty:
-                    break
-
-            if len(batch) > max_backlog:
-                batch = batch[-max_backlog:]
-
-            for block in batch:
-                self.enhancer.push(block)
-
-            while True:
-                pulled = self.enhancer.pull(self.blocksize * 8)
-                if not pulled.size:
-                    break
-                self._out_queue.extend(pulled.tolist())
-
-            if len(self._out_queue) >= self._min_out_buffer:
-                self._warmup_done = True
+        self.enhanced = value
+        self._core.set_enhanced(value)
 
     def _processing_step(self, indata: np.ndarray) -> None:
-        mono = indata[:, 0].astype(np.float32).copy()
-        self._dry_delay.write(mono)
-        self._in_queue.put(mono)
+        self._core.push_input(indata[:, 0])
 
     def _read_playback_block(self) -> np.ndarray:
-        n = self.blocksize
-        out = np.zeros(n, dtype=np.float32)
-
-        with self._lock:
-            use_enhanced = (
-                self.enhanced
-                and self._warmup_done
-                and len(self._out_queue) >= self._min_out_buffer
-            )
-
-        if use_enhanced:
-            avail = min(n, len(self._out_queue))
-            for i in range(avail):
-                out[i] = self._out_queue.popleft()
-            if avail < n:
-                # Underrun: use latency-matched dry instead of silence (avoids gaps)
-                out[avail:] = self._dry_delay.read(n - avail)
-        else:
-            out = self._dry_delay.read(n)
-
-        # Soft limiter
-        peak = np.max(np.abs(out))
-        if peak > 0.99:
-            out = out * (0.99 / peak)
-        return out
+        return self._core.read_output(self.blocksize)
 
     def audio_callback(self, indata, outdata, frames, time_info, status) -> None:
         if status:
@@ -305,11 +201,11 @@ class LiveDemo:
 
     def _print_stats(self) -> None:
         mode = "ENHANCED" if self.enhanced else "BYPASS"
-        warmup = "ready" if self._warmup_done else "warming up…"
+        warmup = "ready" if self._core.warmup_done else "warming up…"
         rtf = self.enhancer.mean_rtf
         lat_ms = self.enhancer.algorithmic_latency_sec * 1000
-        q_out = len(self._out_queue)
-        q_dry = len(self._dry_delay)
+        q_out = self._core.out_queue_len
+        q_dry = len(self._core._dry_delay)
         line = (
             f"\r[{mode}] {warmup} | latency≈{lat_ms:.0f}ms | "
             f"RTF={rtf:.2f} | out_q={q_out} dry_q={q_dry}   "
@@ -318,11 +214,7 @@ class LiveDemo:
         sys.stderr.flush()
 
     def finish(self) -> None:
-        self._worker_stop.set()
-        self._worker.join(timeout=2.0)
-        tail = self.enhancer.flush()
-        if tail.size:
-            self._out_queue.extend(tail.tolist())
+        self._core.shutdown()
 
 
 def run_mic(args: argparse.Namespace) -> None:
