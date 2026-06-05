@@ -6,10 +6,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install PyTorch CPU (override in Space if GPU)
+# PyPI first (do not use --index-url for torch: it hides PyPI and breaks fastapi)
 COPY requirements-web.txt /app/requirements-web.txt
-RUN pip install --no-cache-dir -r requirements-web.txt \
-    torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements-web.txt \
+    && pip install --no-cache-dir torch torchaudio \
+        --index-url https://download.pytorch.org/whl/cpu
 
 COPY . /app
 

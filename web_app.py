@@ -34,6 +34,8 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -49,6 +51,24 @@ from src.web_models import (  # noqa: E402
 from src.ws_session import WebStreamSession  # noqa: E402
 
 STATIC_DIR = BASE_DIR / "static"
+# Bump when static UI changes (cache-bust query string in index.html).
+UI_ASSET_VERSION = "3"
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+}
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Avoid stale index.html / app.js in the browser during development."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/static/"):
+            for k, v in _NO_CACHE_HEADERS.items():
+                response.headers[k] = v
+        return response
 
 _enhancer: Optional[StreamingEnhancer] = None
 _configs = None
@@ -172,11 +192,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FSPEN Live", lifespan=lifespan)
+app.add_middleware(NoCacheMiddleware)
 
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers=_NO_CACHE_HEADERS,
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)

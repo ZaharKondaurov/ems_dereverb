@@ -61,8 +61,44 @@ h1 {
   width: 5.5rem;
 }
 
+.rtf-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 8px;
+  background: #1a1d26;
+  border: 1px solid #3c4043;
+}
+
+.rtf-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa0a6;
+}
+
+.rtf-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  color: #e8eaed;
+}
+
+.rtf-value.rtf-ok {
+  color: #81c995;
+}
+
+.rtf-value.rtf-slow {
+  color: #f9ab00;
+}
+
 .model-status {
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   color: #9aa0a6;
   flex: 1 1 100%;
 }
@@ -224,7 +260,45 @@ canvas {
 }
 
 .hint {
-  padding: 0 1.5rem 1.5rem;
-  font-size: 0.8rem;
-  color: #6b7280;
+  margin: 0 1.5rem 1.5rem;
+  padding: 1.1rem 1.25rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: #bdc1c6;
+  background: #141820;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+}
+
+.hint p {
+  margin: 0 0 0.55rem;
+}
+
+.hint p:last-child {
+  margin-bottom: 0;
+}
+
+.hint strong {
+  color: #e8eaed;
+  font-weight: 600;
+}
+
+.file-rtf-line {
+  margin: 0 1.5rem 0.75rem;
+  padding: 0.75rem 1.1rem;
+  font-size: 1.05rem;
+  color: #bdc1c6;
+  background: #1a1d26;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+}
+
+.file-rtf-line strong {
+  font-size: 1.35rem;
+  color: #81c995;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-rtf-line[hidden] {
+  display: none;
 }

@@ -202,6 +202,8 @@ const selPreset = document.getElementById("selPreset");
 const inpChunkMs = document.getElementById("inpChunkMs");
 const btnApplyModel = document.getElementById("btnApplyModel");
 const modelStatusEl = document.getElementById("modelStatus");
+const rtfValueEl = document.getElementById("rtfValue");
+const fileRtfLineEl = document.getElementById("fileRtfLine");
 
 const tabButtons = document.querySelectorAll(".tab");
 const panelLive = document.getElementById("panelLive");
@@ -231,6 +233,31 @@ function setStatus(text) {
 
 function setModelStatus(text) {
   modelStatusEl.textContent = text;
+}
+
+function setRtf(value) {
+  if (!rtfValueEl) return;
+  rtfValueEl.classList.remove("rtf-ok", "rtf-slow");
+  if (value == null || value <= 0 || Number.isNaN(Number(value))) {
+    rtfValueEl.textContent = "—";
+    return;
+  }
+  const v = Number(value);
+  rtfValueEl.textContent = v.toFixed(2);
+  if (v >= 1) rtfValueEl.classList.add("rtf-ok");
+  else rtfValueEl.classList.add("rtf-slow");
+}
+
+function setFileRtf(value, durationSec) {
+  if (!fileRtfLineEl) return;
+  if (value == null || value <= 0) {
+    fileRtfLineEl.hidden = true;
+    return;
+  }
+  const dur = durationSec != null ? ` · ${durationSec} с` : "";
+  fileRtfLineEl.innerHTML =
+    `Скорость обработки: <strong>RTF ${Number(value).toFixed(2)}</strong>${dur}`;
+  fileRtfLineEl.hidden = false;
 }
 
 function setFileStatus(text) {
@@ -366,9 +393,9 @@ async function start() {
         ? ((playback.available / TARGET_SR) * 1000).toFixed(0)
         : "—";
       const q = msg.out_q != null ? ` · q ${msg.out_q}` : "";
-      const rtf = msg.rtf != null && msg.rtf > 0 ? ` · RTF ${msg.rtf}` : "";
+      if (msg.rtf != null) setRtf(msg.rtf);
       const mon = playbackMuted ? " · monitor off" : "";
-      setStatus(`${mode} · ${warm} · mic ${lvl}% · buf ${bufMs}ms${rtf}${q}${mon}`);
+      setStatus(`${mode} · ${warm} · mic ${lvl}% · buf ${bufMs}ms${q}${mon}`);
     };
 
     ws.onclose = () => {
@@ -413,8 +440,8 @@ function stop(user = true) {
 }
 
 function formatModelStatus(cur) {
-  const rtf = cur.rtf != null && cur.rtf > 0 ? ` · RTF ${cur.rtf}` : "";
-  return `Active: ${cur.preset_label} · ${cur.eval_fn}${rtf}`;
+  setRtf(cur.rtf);
+  return `Active: ${cur.preset_label} · ${cur.eval_fn}`;
 }
 
 async function loadCatalog() {
@@ -479,6 +506,7 @@ async function processFile() {
 
   btnProcessFile.disabled = true;
   fileDownload.hidden = true;
+  if (fileRtfLineEl) fileRtfLineEl.hidden = true;
   if (lastDownloadUrl) {
     URL.revokeObjectURL(lastDownloadUrl);
     lastDownloadUrl = null;
@@ -513,10 +541,11 @@ async function processFile() {
     fileDownload.textContent = `Download ${outName}`;
     fileDownload.hidden = false;
 
-    const dur = meta.duration_sec != null ? `${meta.duration_sec}s` : "";
-    const rtf = meta.rtf != null && meta.rtf > 0 ? ` · RTF ${meta.rtf}` : "";
-    setFileStatus(`Done${dur ? ` · ${dur}` : ""}${rtf}`);
+    const dur = meta.duration_sec != null ? `${meta.duration_sec} с` : "";
+    setFileStatus(dur ? `Готово · ${dur}` : "Готово");
+    setFileRtf(meta.rtf, meta.duration_sec);
     if (meta.rtf != null) {
+      setRtf(meta.rtf);
       setModelStatus(formatModelStatus({ ...catalog.current, rtf: meta.rtf }));
     }
   } catch (e) {

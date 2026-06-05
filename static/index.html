@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FSPEN — Live Enhancement</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
-<body>
+<body data-ui-version="3">
   <header>
     <h1>FSPEN — fullband denoise &amp; dereverb</h1>
-    <p class="subtitle">48 kHz · use <strong>headphones</strong> on the Live tab</p>
+    <p class="subtitle">48 kHz · Используйте <strong>наушники</strong> чтобы избежать эхо</p>
   </header>
 
   <section class="model-bar">
@@ -23,6 +23,10 @@
       <input type="number" id="inpChunkMs" min="50" max="3000" step="50" value="500" />
     </label>
     <button id="btnApplyModel" type="button" class="secondary">Apply model</button>
+    <div class="rtf-panel" title="Real-time factor: chunk_duration / inference_time (≥1 = faster than real time)">
+      <span class="rtf-label">RTF</span>
+      <span id="rtfValue" class="rtf-value">—</span>
+    </div>
     <span id="modelStatus" class="model-status"></span>
   </section>
 
@@ -56,10 +60,10 @@
       </div>
     </section>
 
-    <p class="hint">
-      Time flows left → right. Enhanced = model output; Bypass = latency-matched dry.
-      Turn off Monitor to keep spectrograms without headphone playback.
-    </p>
+    <div class="hint">
+      <p><strong>Enhanced</strong> — выход модели · <strong>Bypass</strong> — сухой сигнал с той же задержкой.</p>
+      <p><strong>Monitor off</strong> — спектрограммы без звука в наушниках.</p>
+    </div>
   </section>
 
   <section id="panelFile" class="tab-panel" role="tabpanel" hidden>
@@ -75,9 +79,10 @@
       <button id="btnProcessFile" type="button" disabled>Process</button>
     </div>
     <p id="fileStatus" class="file-status">Select a file, then Process.</p>
+    <p id="fileRtfLine" class="file-rtf-line" hidden></p>
     <a id="fileDownload" class="download-link" href="#" download hidden>Download enhanced WAV</a>
   </section>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>
