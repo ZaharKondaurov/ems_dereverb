@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional, Tuple
+from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -14,6 +15,18 @@ from src.utils import model_eval, model_eval_old, vorbis_window
 _LIVE_PEAK_FLOOR = 0.12
 _LIVE_ATTACK = 0.35
 _LIVE_RELEASE = 0.002
+
+# Configs that use FullSubPathExtension_ext + model_eval (others: model_eval_old).
+_EXT_CONFIG_NAMES = frozenset(
+    {
+        "TrainConfig_48kHz_enc_ext",
+        "TrainConfig_48kHz_enc_ext_lay_1_overlap",
+    }
+)
+
+
+def config_uses_ext_eval(config_name: str) -> bool:
+    return config_name in _EXT_CONFIG_NAMES
 
 
 def load_enhancer(
@@ -31,9 +44,13 @@ def load_enhancer(
     configs = config_cls()
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    model_cls = FullSubPathExtension_ext
-    if config_name == "TrainConfig" or config_name == "TrainConfig_48kHz_overlap":
-        model_cls = FullSubPathExtension
+    state["model_state_dict"] = OrderedDict([(k, v) for k, v in state["model_state_dict"].items() if "matcher" not in k])
+
+    model_cls = (
+        FullSubPathExtension_ext
+        if config_uses_ext_eval(config_name)
+        else FullSubPathExtension
+    )
 
     model = model_cls(configs=configs)
     model.load_state_dict(state["model_state_dict"])
@@ -133,7 +150,7 @@ class StreamingEnhancer:
             )
             h0 = self._h0
 
-            if "ext" in self.model._get_name():
+            if isinstance(self.model, FullSubPathExtension_ext):
                 enhanced_spec, new_h0 = model_eval(
                     self.model, spec, self.configs, h0=h0
                 )

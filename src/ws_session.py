@@ -100,6 +100,7 @@ class WebStreamSession:
                 "enhanced": self.enhanced,
                 "sr": self.sr,
                 "n_freq": self.n_freq,
+                "rtf": round(float(self.enhancer.mean_rtf), 3),
             }
 
         self._core.push_input(y)
@@ -120,4 +121,5 @@ class WebStreamSession:
             "sr": self.sr,
             "n_freq": self.n_freq,
             "out_q": self._core.out_queue_len,
+            "rtf": round(float(self.enhancer.mean_rtf), 3),
         }

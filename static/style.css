@@ -27,7 +27,127 @@ h1 {
   font-size: 0.9rem;
 }
 
-.controls {
+.model-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  padding: 0.75rem 1.5rem;
+  background: #141820;
+  border-bottom: 1px solid #2a2f3a;
+}
+
+.model-bar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #9aa0a6;
+}
+
+.model-bar select,
+.model-bar input[type="number"] {
+  min-width: 12rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #3c4043;
+  background: #1a1d26;
+  color: #e8eaed;
+  font-size: 0.9rem;
+}
+
+.chunk-label input {
+  min-width: 5rem;
+  width: 5.5rem;
+}
+
+.rtf-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 8px;
+  background: #1a1d26;
+  border: 1px solid #3c4043;
+}
+
+.rtf-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa0a6;
+}
+
+.rtf-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  color: #e8eaed;
+}
+
+.rtf-value.rtf-ok {
+  color: #81c995;
+}
+
+.rtf-value.rtf-slow {
+  color: #f9ab00;
+}
+
+.model-status {
+  font-size: 0.9rem;
+  color: #9aa0a6;
+  flex: 1 1 100%;
+}
+
+@media (min-width: 900px) {
+  .model-status {
+    flex: 1 1 auto;
+    text-align: right;
+  }
+}
+
+.tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid #2a2f3a;
+}
+
+.tab {
+  padding: 0.65rem 1.25rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+  font-size: 0.95rem;
+  border-radius: 0;
+}
+
+.tab:hover {
+  color: #e8eaed;
+}
+
+.tab.active {
+  color: #4c8bf5;
+  border-bottom-color: #4c8bf5;
+  background: transparent;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.controls,
+.file-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -43,6 +163,15 @@ button {
   cursor: pointer;
   background: #4c8bf5;
   color: #fff;
+}
+
+button.secondary {
+  background: #3c4043;
+}
+
+button.secondary[aria-pressed="true"] {
+  background: #5f6368;
+  box-shadow: inset 0 0 0 1px #9aa0a6;
 }
 
 button:disabled {
@@ -61,10 +190,36 @@ button:disabled {
   font-size: 0.95rem;
 }
 
-.status {
+.status,
+.file-status {
   color: #9aa0a6;
   font-size: 0.85rem;
   margin-left: auto;
+}
+
+.file-status {
+  margin-left: 0;
+  padding: 0 1.5rem 0.5rem;
+}
+
+.file-picker input[type="file"] {
+  font-size: 0.85rem;
+  color: #bdc1c6;
+}
+
+.download-link {
+  display: inline-block;
+  margin: 0 1.5rem 1.5rem;
+  padding: 0.55rem 1rem;
+  background: #34a853;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.download-link[hidden] {
+  display: none;
 }
 
 .specs {
@@ -105,7 +260,45 @@ canvas {
 }
 
 .hint {
-  padding: 0 1.5rem 1.5rem;
-  font-size: 0.8rem;
-  color: #6b7280;
+  margin: 0 1.5rem 1.5rem;
+  padding: 1.1rem 1.25rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: #bdc1c6;
+  background: #141820;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+}
+
+.hint p {
+  margin: 0 0 0.55rem;
+}
+
+.hint p:last-child {
+  margin-bottom: 0;
+}
+
+.hint strong {
+  color: #e8eaed;
+  font-weight: 600;
+}
+
+.file-rtf-line {
+  margin: 0 1.5rem 0.75rem;
+  padding: 0.75rem 1.1rem;
+  font-size: 1.05rem;
+  color: #bdc1c6;
+  background: #1a1d26;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+}
+
+.file-rtf-line strong {
+  font-size: 1.35rem;
+  color: #81c995;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-rtf-line[hidden] {
+  display: none;
 }
