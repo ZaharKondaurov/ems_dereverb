@@ -14,7 +14,9 @@ data/*
 .vscode/
 NISQA_s/
 app_test/
-checkpoints/
+*.zip
+checkpoints/*
+!checkpoints/fspen_chkp.zip
 dfn*/
 *.wav
 gtcrn/
@@ -22,5 +24,4 @@ input/
 runs/
 samples/
 *.csv
-*.zip
 notebooks/*.py
