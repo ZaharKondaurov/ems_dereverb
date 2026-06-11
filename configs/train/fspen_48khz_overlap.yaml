@@ -9,8 +9,8 @@ model: FullSubPathExtension
 eval_fn: model_eval_old
 model_name: TrainConfig_48kHz_overlap_1984
 
-epochs: 1
-batch_size: 4
+epochs: 50
+batch_size: 32
 lr: 0.0005
 scheduler_step: 4
 scheduler_gamma: 0.98
@@ -27,14 +27,14 @@ val_data_dir: data/DS_10283_2791/clean_trainset_28spk_wav
 noise_dir_train: data/demand_train
 noise_dir_val: data/demand_val
 rir_dirs_train:
-  # - data/rirs48_small_3_train
-  # - data/rirs48_medium_3_train
-  # - data/rirs48_large_3_train
+  - data/rirs48_small_3_train
+  - data/rirs48_medium_3_train
+  - data/rirs48_large_3_train
   - data/rirs48_super_large_3_train
 rir_dirs_val:
-  # - data/rirs48_small_3_val
-  # - data/rirs48_medium_3_val
-  # - data/rirs48_large_3_val
+  - data/rirs48_small_3_val
+  - data/rirs48_medium_3_val
+  - data/rirs48_large_3_val
   - data/rirs48_super_large_3_val
 snr: [0, 5, 10, 15]
 noise_proba: 0.85
