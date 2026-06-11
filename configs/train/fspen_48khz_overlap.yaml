@@ -1,0 +1,48 @@
+# Training recipe: FSPEN + 48 kHz + Overlap
+# Usage:
+#   python train_fspen.py --train-config configs/train/fspen_48khz_overlap.yaml
+# Override any field from CLI, e.g.:
+#   python train_fspen.py -c configs/train/fspen_48khz_overlap.yaml --epochs 10 --device cpu
+
+config: TrainConfig_48kHz_overlap
+model: FullSubPathExtension
+eval_fn: model_eval_old
+model_name: TrainConfig_48kHz_overlap_1984
+
+epochs: 1
+batch_size: 4
+lr: 0.0005
+scheduler_step: 4
+scheduler_gamma: 0.98
+val_every: 1
+plot_every: 1
+num_workers: 4
+seed: 1984
+deterministic: true
+device: cuda
+chkp_dir: checkpoints/fspen_chkp
+
+data_dir: data/DS_10283_2791/clean_trainset_56spk_wav
+val_data_dir: data/DS_10283_2791/clean_trainset_28spk_wav
+noise_dir_train: data/demand_train
+noise_dir_val: data/demand_val
+rir_dirs_train:
+  # - data/rirs48_small_3_train
+  # - data/rirs48_medium_3_train
+  # - data/rirs48_large_3_train
+  - data/rirs48_super_large_3_train
+rir_dirs_val:
+  # - data/rirs48_small_3_val
+  # - data/rirs48_medium_3_val
+  # - data/rirs48_large_3_val
+  - data/rirs48_super_large_3_val
+snr: [0, 5, 10, 15]
+noise_proba: 0.85
+rir_proba: 0.85
+max_seq_len_sec: 4.0
+val_partition: 5000
+
+nisqa_config: NISQA_s/config/nisqa_s.yaml
+no_nisqa: false
+# Notebooks call set_epoch(1) before learning_loop; enable for identical RIR shuffle order.
+warmup_dataset_epoch: true

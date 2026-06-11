@@ -1,0 +1,26 @@
+# Evaluation recipe: TrainConfig_48khz (FSPEN + 48 kHz)
+# Usage:
+#   python test_fspen.py -c configs/test/fspen_48khz.yaml
+
+checkpoint: checkpoints/fspen_chkp/TrainConfig_48khz_baseline.pt
+config: TrainConfig_48khz
+model: FullSubPathExtension
+
+test_dir: data/DS_10283_2791/clean_testset_wav
+noise_dir: data/demand_test
+rir_dirs:
+  - data/rirs48_small_3_test
+  - data/rirs48_medium_3_test
+  - data/rirs48_large_3_test
+  - data/rirs48_super_large_3_test
+snr: [0, 5, 10, 15]
+noise_proba: 0.85
+rir_proba: 0.85
+dataset_epoch: 99
+seed: 1984
+num_workers: 0
+benchmark: true
+benchmark_device: cpu
+normalize_output: true
+device: cuda
+output_csv: metrics/TrainConfig_48khz_test.csv

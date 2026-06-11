@@ -54,7 +54,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--chunk-ms",
         type=float,
-        default=250.0,
+        default=512.0,
         help="Processing chunk length in milliseconds",
     )
     p.add_argument(
@@ -237,7 +237,9 @@ def run_mic(args: argparse.Namespace) -> None:
         device = "cpu"
 
     print(f"Loading model from {args.checkpoint} …")
-    model, configs = load_enhancer(args.checkpoint, device=device, config_name=args.config)
+    model, configs = load_enhancer(
+        args.checkpoint, device=device, config_name=args.config
+    )
     sr = configs.sample_rate
     chunk_samples = max(int(sr * args.chunk_ms / 1000), configs.hop_length * 4)
     blocksize = max(int(sr * args.block_ms / 1000), 64)
@@ -318,7 +320,9 @@ def run_offline(args: argparse.Namespace) -> None:
     if device == "cuda" and not torch.cuda.is_available():
         device = "cpu"
 
-    model, configs = load_enhancer(args.checkpoint, device=device, config_name=args.config)
+    model, configs = load_enhancer(
+        args.checkpoint, device=device, config_name=args.config
+    )
     sr = configs.sample_rate
     chunk_samples = max(int(sr * args.chunk_ms / 1000), configs.hop_length * 4)
     enhancer = StreamingEnhancer(
@@ -349,6 +353,7 @@ def main() -> None:
         run_offline(args)
     else:
         import torch
+
         torch.set_num_threads(1)
         torch.set_num_interop_threads(1)
         torch._logging.set_logs(graph_code=False)

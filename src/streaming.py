@@ -44,7 +44,9 @@ def load_enhancer(
     configs = config_cls()
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    state["model_state_dict"] = OrderedDict([(k, v) for k, v in state["model_state_dict"].items() if "matcher" not in k])
+    state["model_state_dict"] = OrderedDict(
+        [(k, v) for k, v in state["model_state_dict"].items() if "matcher" not in k]
+    )
 
     model_cls = (
         FullSubPathExtension_ext

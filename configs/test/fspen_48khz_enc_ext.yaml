@@ -1,0 +1,26 @@
+# Evaluation recipe: TrainConfig_48kHz_enc_ext (SBLE)
+# Usage:
+#   python test_fspen.py -c configs/test/fspen_48khz_enc_ext.yaml
+
+checkpoint: checkpoints/fspen_chkp/TrainConfig_48kHz_enc_ext.pt
+config: TrainConfig_48kHz_enc_ext
+model: FullSubPathExtension_ext
+
+test_dir: data/DS_10283_2791/clean_testset_wav
+noise_dir: data/demand_test
+rir_dirs:
+  - data/rirs48_small_3_test
+  - data/rirs48_medium_3_test
+  - data/rirs48_large_3_test
+  - data/rirs48_super_large_3_test
+snr: [0, 5, 10, 15]
+noise_proba: 0.85
+rir_proba: 0.85
+dataset_epoch: 99
+seed: 1984
+num_workers: 0
+benchmark: true
+benchmark_device: cpu
+normalize_output: true
+device: cuda
+output_csv: metrics/TrainConfig_48kHz_enc_ext_test.csv

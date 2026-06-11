@@ -70,6 +70,7 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
                 response.headers[k] = v
         return response
 
+
 _enhancer: Optional[StreamingEnhancer] = None
 _configs = None
 _sr = 48_000
@@ -115,7 +116,9 @@ def _load_model(
     # torch.set_num_interop_threads(1)
     print(f"Loading [{preset.label}] {ckpt} on {device} …")
     model, configs = load_enhancer(ckpt, device=device, config_name=config_name)
-    chunk_samples = max(int(configs.sample_rate * chunk_ms / 1000), configs.hop_length * 4)
+    chunk_samples = max(
+        int(configs.sample_rate * chunk_ms / 1000), configs.hop_length * 4
+    )
 
     _device = device
     _configs = configs
@@ -124,7 +127,9 @@ def _load_model(
     _config_name = config_name
     _checkpoint_path = ckpt
     _preset_id = preset_id
-    _enhancer = StreamingEnhancer(model, configs, device=device, chunk_samples=chunk_samples)
+    _enhancer = StreamingEnhancer(
+        model, configs, device=device, chunk_samples=chunk_samples
+    )
     print(f"Model ready ({preset.model_class}, {preset.eval_fn}).")
 
 
@@ -318,9 +323,7 @@ async def websocket_endpoint(ws: WebSocket):
 
             if mtype == "audio":
                 if _enhancer is None:
-                    await ws.send_json(
-                        {"type": "error", "message": "Model not loaded"}
-                    )
+                    await ws.send_json({"type": "error", "message": "Model not loaded"})
                     continue
                 samples = msg.get("data", [])
                 y = np.asarray(samples, dtype=np.float32)
@@ -349,18 +352,8 @@ def main() -> None:
         default=DEFAULT_PRESET_ID,
         help="Model preset id (see /api/catalog)",
     )
-    p.add_argument(
-        "--checkpoint",
-        default=None,
-        help="Deprecated: use --preset; overrides checkpoint path only",
-    )
-    p.add_argument(
-        "--config",
-        default=None,
-        help="Deprecated: use --preset",
-    )
     p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
-    p.add_argument("--chunk-ms", type=float, default=500.0)
+    p.add_argument("--chunk-ms", type=float, default=512.0)
     p.add_argument("--history-sec", type=float, default=2.5)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=7860)

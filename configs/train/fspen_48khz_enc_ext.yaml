@@ -1,0 +1,45 @@
+# Training recipe: FSPEN + 48 kHz + SBLE (enc_ext)
+# Usage:
+#   python train_fspen.py -c configs/train/fspen_48khz_enc_ext.yaml
+
+config: TrainConfig_48kHz_enc_ext
+model: FullSubPathExtension_ext
+eval_fn: model_eval
+model_name: TrainConfig_48kHz_enc_ext_1984
+
+epochs: 50
+batch_size: 32
+lr: 0.0005
+scheduler_step: 4
+scheduler_gamma: 0.98
+val_every: 1
+plot_every: 1
+num_workers: 4
+seed: 1984
+deterministic: true
+device: cuda
+chkp_dir: checkpoints/fspen_chkp
+
+data_dir: data/DS_10283_2791/clean_trainset_56spk_wav
+val_data_dir: data/DS_10283_2791/clean_trainset_28spk_wav
+noise_dir_train: data/demand_train
+noise_dir_val: data/demand_val
+rir_dirs_train:
+  - data/rirs48_small_3_train
+  - data/rirs48_medium_3_train
+  - data/rirs48_large_3_train
+  - data/rirs48_super_large_3_train
+rir_dirs_val:
+  - data/rirs48_small_3_val
+  - data/rirs48_medium_3_val
+  - data/rirs48_large_3_val
+  - data/rirs48_super_large_3_val
+snr: [0, 5, 10, 15]
+noise_proba: 0.85
+rir_proba: 0.85
+max_seq_len_sec: 4.0
+val_partition: 5000
+
+nisqa_config: NISQA_s/config/nisqa_s.yaml
+no_nisqa: false
+warmup_dataset_epoch: true

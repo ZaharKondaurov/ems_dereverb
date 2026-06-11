@@ -1,6 +1,5 @@
 !data/.gitkeep
 !models/.gitkeep
-!notebooks/.gitkeep
 !src/.gitkeep
 .ipynb_checkpoints
 .idea/
@@ -24,4 +23,9 @@ input/
 runs/
 samples/
 *.csv
-notebooks/*.py
+*.pdf
+gtcrn*/
+notebooks/
+!notebooks/.gitkeep
+plots/
+figures/

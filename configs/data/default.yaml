@@ -1,0 +1,27 @@
+# Usage:
+#   python generate_data.py -c configs/data/default.yaml
+#   python generate_data.py --tasks generate_rirs --rir-presets small
+
+tasks:
+  - split_demand
+  - generate_rirs
+
+seed: 1984
+sample_rate: 48000
+stimulus: data/DS_10283_2791/clean_trainset_28spk_wav/p226_001.wav
+
+# RIR presets: small, medium, large, super_large
+rir_presets:
+  - small
+  - medium
+  - large
+  - super_large
+
+train_fraction: 0.7
+val_fraction: 0.5
+
+demand_src_dir: data/demand
+demand_train_dir: data/demand_train
+demand_val_test_dir: data/demand_val_test
+demand_val_dir: data/demand_val
+demand_test_dir: data/demand_test
